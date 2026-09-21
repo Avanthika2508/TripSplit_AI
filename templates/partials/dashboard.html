@@ -1,0 +1,799 @@
+<!-- OUT-OF-BAND SWAPS FOR SIDEBAR & HEADER SYNC -->
+<div id="trip-selector-container" hx-swap-oob="true" class="space-y-2 p-3 rounded-2xl bg-slate-100/80 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800">
+    <div class="flex items-center justify-between">
+        <span class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Active Trip</span>
+        <button type="button" onclick="openNewTripModal()" class="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center space-x-1">
+            <span>+ New Trip</span>
+        </button>
+    </div>
+
+    {% if all_trips %}
+    <form hx-post="/api/trips/select" hx-target="#dashboard-content" hx-swap="innerHTML" class="space-y-1">
+        <select name="trip_id" onchange="this.form.requestSubmit()"
+                class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700/80 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 dark:text-slate-100 focus:border-indigo-500 outline-none transition cursor-pointer shadow-sm">
+            {% for t in all_trips %}
+            <option value="{{ t.id }}" {% if active_trip and active_trip.id == t.id %}selected{% endif %}>
+                ✈️ {{ t.name }}
+            </option>
+            {% endfor %}
+        </select>
+    </form>
+    {% if active_trip %}
+    <div class="flex items-center justify-between text-[10px] text-slate-400 pt-1">
+        <span>Created: {{ active_trip.created_at.strftime('%b %d') }}</span>
+        <button hx-post="/api/trips/{{ active_trip.id }}/delete" hx-target="#dashboard-content" hx-swap="innerHTML"
+                hx-confirm="Are you sure you want to delete this entire trip and all its expenses?"
+                class="text-rose-500 hover:underline">
+            Delete Trip
+        </button>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="text-[11px] text-slate-400 italic py-1">No trips created yet.</div>
+    {% endif %}
+</div>
+
+<span id="header-trip-pill" hx-swap-oob="true" class="hidden sm:inline-flex items-center space-x-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/10 px-2.5 py-0.5 rounded-full border border-indigo-200 dark:border-indigo-500/30">
+    <span>✈️</span>
+    <span>{{ active_trip.name if active_trip else 'No Trip Active' }}</span>
+</span>
+
+<div id="participants-container" hx-swap-oob="true" class="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+    {% for p in participants %}
+    <div class="flex items-center justify-between p-2 rounded-xl bg-slate-100 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800/80 text-xs">
+        <span class="text-slate-800 dark:text-slate-300 font-medium flex items-center space-x-1.5">
+            <span class="w-2 h-2 rounded-full bg-indigo-500"></span>
+            <span>{{ p }}</span>
+        </span>
+        <button hx-post="/api/participants/{{ p }}/delete" hx-target="#dashboard-content" hx-swap="innerHTML"
+                class="text-slate-400 hover:text-rose-500 p-0.5 transition" title="Remove traveler">
+            ✕
+        </button>
+    </div>
+    {% else %}
+    <div class="text-[11px] text-slate-400 italic py-1">No travelers registered yet.</div>
+    {% endfor %}
+</div>
+
+<div id="api-key-status" hx-swap-oob="true" class="flex items-center justify-between">
+    <span class="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Gemini OCR</span>
+    {% if has_api_key %}
+    <span class="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-500/20 font-medium">Ready</span>
+    {% else %}
+    <span class="text-[10px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-500/20 font-medium">Missing</span>
+    {% endif %}
+</div>
+
+{% if not all_trips %}
+<!-- ========================================================================= -->
+<!-- ZERO-STATE: NO TRIPS CREATED YET                                          -->
+<!-- ========================================================================= -->
+<div class="p-8 sm:p-12 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl text-center space-y-6 max-w-3xl mx-auto my-8">
+    <div class="w-20 h-20 rounded-3xl bg-gradient-to-tr from-indigo-500 to-violet-600 text-white flex items-center justify-center text-4xl mx-auto shadow-xl shadow-indigo-500/30">
+        ✈️
+    </div>
+    
+    <div class="space-y-2">
+        <h3 class="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">
+            Create Your First Trip
+        </h3>
+        <p class="text-sm text-slate-500 dark:text-slate-400 max-w-lg mx-auto leading-relaxed">
+            Welcome to TripSplit AI! Create an isolated trip ledger to track group expenses, scan receipts with Gemini AI, and automatically minimize multi-party debts in Indian Rupees (₹).
+        </p>
+    </div>
+
+    <!-- QUICK ONBOARDING FORM -->
+    <div class="p-6 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/80 max-w-md mx-auto space-y-4 text-left">
+        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Trip Name</label>
+        <form hx-post="/api/trips" hx-target="#dashboard-content" hx-swap="innerHTML" class="flex items-center space-x-2">
+            <input type="text" name="name" placeholder="e.g. Goa Vacation 2026, Ladakh Trek..." required
+                   class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition">
+            <button type="submit"
+                    class="px-5 py-2.5 rounded-xl text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition shadow-md shadow-indigo-600/25 shrink-0">
+                Create Trip
+            </button>
+        </form>
+    </div>
+
+    <!-- ONBOARDING TIPS -->
+    <div class="pt-4 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center justify-center gap-2">
+        <span>✨ Pristine Empty Ledger</span>
+        <span>•</span>
+        <span>⚡ Greedy Cash-Flow Optimization</span>
+        <span>•</span>
+        <span>🇮🇳 Base Currency: INR (₹)</span>
+    </div>
+</div>
+
+{% elif not participants %}
+<!-- ========================================================================= -->
+<!-- ZERO-STATE: TRIP EXISTS BUT 0 TRAVELERS REGISTERED                        -->
+<!-- ========================================================================= -->
+<div class="p-8 sm:p-12 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl text-center space-y-6 max-w-3xl mx-auto my-8">
+    <div class="w-20 h-20 rounded-3xl bg-gradient-to-tr from-indigo-500 to-violet-600 text-white flex items-center justify-center text-4xl mx-auto shadow-xl shadow-indigo-500/30">
+        🇮🇳
+    </div>
+    
+    <div class="space-y-2">
+        <div class="inline-flex items-center space-x-1.5 text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-3 py-1 rounded-full border border-indigo-200 dark:border-indigo-500/20 mb-1">
+            <span>✈️</span>
+            <span>Trip: {{ active_trip.name }}</span>
+        </div>
+        <h3 class="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">
+            Add Travelers to {{ active_trip.name }}
+        </h3>
+        <p class="text-sm text-slate-500 dark:text-slate-400 max-w-lg mx-auto leading-relaxed">
+            This trip has no travelers yet. Add travelers below to begin logging and splitting group expenses.
+        </p>
+    </div>
+
+    <!-- QUICK ONBOARDING FORM -->
+    <div class="p-6 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/80 max-w-md mx-auto space-y-4 text-left">
+        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Add First Traveler</label>
+        <form hx-post="/api/participants" hx-target="#dashboard-content" hx-swap="innerHTML" class="flex items-center space-x-2">
+            <input type="text" name="name" placeholder="e.g. Aarav, Priya, Rohan..." required
+                   class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition">
+            <button type="submit"
+                    class="px-5 py-2.5 rounded-xl text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition shadow-md shadow-indigo-600/25 shrink-0">
+                Add Traveler
+            </button>
+        </form>
+    </div>
+
+    <!-- ONBOARDING TIPS -->
+    <div class="pt-4 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400 flex items-center justify-center space-x-2">
+        <span>👥 Add 2 or more travelers to start logging group expenses</span>
+    </div>
+</div>
+
+{% else %}
+
+<!-- ========================================================================= -->
+<!-- ACTIVE DASHBOARD VIEW                                                     -->
+<!-- ========================================================================= -->
+
+<!-- TOP CONTROLS: VIEW SWITCHER -->
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
+    <div class="flex items-center space-x-2">
+        <span class="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">View Mode:</span>
+        <div class="flex p-1 bg-slate-200 dark:bg-slate-900 rounded-xl border border-slate-300 dark:border-slate-800 text-xs">
+            <button type="button" onclick="switchViewMode('group')" id="view-btn-group"
+                    class="px-3.5 py-1.5 rounded-lg font-semibold text-xs transition text-white bg-indigo-600 shadow-sm">
+                🌐 Group Overview
+            </button>
+            <button type="button" onclick="switchViewMode('individual')" id="view-btn-individual"
+                    class="px-3.5 py-1.5 rounded-lg font-semibold text-xs transition text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200">
+                👤 Individual Breakdown
+            </button>
+        </div>
+    </div>
+
+    <!-- SPENDING HEALTH INDICATOR STATUS PILL -->
+    <div class="flex items-center space-x-2 text-xs">
+        <span class="text-slate-500 dark:text-slate-400 font-medium">Spending Health:</span>
+        <span class="px-2.5 py-1 rounded-full text-xs font-semibold {{ health.badge }} border border-slate-200 dark:border-slate-700">
+            {{ health.status }}
+        </span>
+    </div>
+</div>
+
+<!-- REAL-TIME METRIC CARDS (IN INR ₹) -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+    <div class="min-w-0 p-5 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-lg relative overflow-hidden group hover:border-slate-300 dark:hover:border-slate-700 transition">
+        <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Travelers</span>
+        <div class="text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100 mt-1 flex items-baseline justify-between">
+            <span>{{ total_travelers }}</span>
+            <span class="text-xs text-blue-600 dark:text-blue-400 font-semibold bg-blue-50 dark:bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-200 dark:border-blue-500/20">Active</span>
+        </div>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-2 truncate">Sharing trip expenditures</p>
+    </div>
+
+    <div class="min-w-0 p-5 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-lg relative overflow-hidden group hover:border-slate-300 dark:hover:border-slate-700 transition">
+        <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Logged Expenses</span>
+        <div class="text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100 mt-1 flex items-baseline justify-between">
+            <span>{{ total_expenses }}</span>
+            <span class="text-xs text-indigo-600 dark:text-indigo-400 font-semibold bg-indigo-50 dark:bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-200 dark:border-indigo-500/20">Records</span>
+        </div>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-2 truncate">Across 5 categories</p>
+    </div>
+
+    <div class="min-w-0 p-5 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-lg relative overflow-hidden group hover:border-slate-300 dark:hover:border-slate-700 transition">
+        <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Trip Spend</span>
+        <div class="text-xl sm:text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1 flex items-baseline justify-between">
+            <span class="truncate" title="₹{{ '{:,.2f}'.format(total_spend) }}">₹{{ '{:,.2f}'.format(total_spend) }}</span>
+            <span class="text-xs text-emerald-600 dark:text-emerald-400 font-semibold bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-500/20 shrink-0 ml-1">INR (₹)</span>
+        </div>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-2 truncate">Total combined spend</p>
+    </div>
+
+    <div class="min-w-0 p-5 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-lg relative overflow-hidden group hover:border-slate-300 dark:hover:border-slate-700 transition">
+        <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Avg Spend / Person</span>
+        <div class="text-xl sm:text-2xl font-bold text-purple-600 dark:text-purple-400 mt-1 flex items-baseline justify-between">
+            <span class="truncate" title="₹{{ '{:,.2f}'.format(avg_spend) }}">₹{{ '{:,.2f}'.format(avg_spend) }}</span>
+            <span class="text-xs text-purple-600 dark:text-purple-400 font-semibold bg-purple-50 dark:bg-purple-500/10 px-2 py-0.5 rounded-full border border-purple-200 dark:border-purple-500/20 shrink-0 ml-1">Fair Share</span>
+        </div>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-2 truncate">Per-traveler baseline</p>
+    </div>
+
+    <div class="min-w-0 p-5 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-lg relative overflow-hidden group hover:border-slate-300 dark:hover:border-slate-700 transition">
+        <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Transactions Saved</span>
+        <div class="text-xl sm:text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1 flex items-baseline justify-between">
+            <span>{{ saved_transactions }}</span>
+            <span class="text-xs text-amber-600 dark:text-amber-400 font-semibold bg-amber-50 dark:bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-500/20 shrink-0 ml-1">{{ saved_percent }}%</span>
+        </div>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-2 truncate">{{ saved_transactions }} saved vs {{ naive_edges }} pairs</p>
+    </div>
+</div>
+
+<!-- SPENDING HEALTH PROGRESS BAR -->
+<div class="p-5 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm space-y-2">
+    <div class="flex items-center justify-between text-xs">
+        <span class="font-semibold text-slate-700 dark:text-slate-300 flex items-center space-x-1.5">
+            <span>📊 Group Spend Velocity Meter:</span>
+            <span class="text-indigo-600 dark:text-indigo-400 font-bold">{{ health.status }}</span>
+        </span>
+        <span class="text-slate-500 dark:text-slate-400">{{ health.tip }}</span>
+    </div>
+    <div class="w-full h-2.5 bg-slate-100 dark:bg-slate-950 rounded-full overflow-hidden p-0.5 border border-slate-200 dark:border-slate-800">
+        <div class="h-full {{ health.color }} rounded-full transition-all duration-500 shadow-sm" style="width: {{ health.meter_width }}%"></div>
+    </div>
+</div>
+
+<!-- GAMIFIED ACHIEVEMENTS SHOWCASE -->
+{% if achievements %}
+<div>
+    <div class="flex items-center justify-between mb-3">
+        <h3 class="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
+            <span>🏆</span>
+            <span>Trip Achievements & Honors</span>
+        </h3>
+        <span class="text-[11px] text-indigo-600 dark:text-indigo-400 font-medium">Real-time statistics</span>
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {% for b in achievements %}
+        <div class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-md transition space-y-2">
+            <div class="flex items-center justify-between">
+                <span class="text-2xl">{{ b.icon }}</span>
+                <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400">
+                    {{ b.title }}
+                </span>
+            </div>
+            <div>
+                <div class="text-sm font-bold text-slate-900 dark:text-slate-100">{{ b.recipient }}</div>
+                <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{{ b.desc }}</p>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+
+<!-- ========================================================================= -->
+<!-- PANE 1: GROUP MACRO OVERVIEW                                              -->
+<!-- ========================================================================= -->
+<div id="view-group-pane" class="space-y-6">
+
+    <!-- MAIN WORKSPACE: LOG EXPENSE + LEDGER -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- LEFT: LOG EXPENSE (MANUAL & AI) -->
+        <div class="lg:col-span-5 space-y-6">
+            
+            <div class="p-6 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-xl space-y-5">
+                <div class="flex items-center justify-between">
+                    <h3 class="font-semibold text-slate-900 dark:text-slate-100 flex items-center space-x-2">
+                        <span class="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/20">💳</span>
+                        <span>Log New Expense</span>
+                    </h3>
+                    <div class="flex p-1 bg-slate-100 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 text-xs">
+                        <button type="button" onclick="switchExpenseTab('manual')" id="tab-btn-manual"
+                                class="px-3 py-1.5 rounded-lg font-medium transition text-white bg-indigo-600 shadow-sm">
+                            Manual Entry
+                        </button>
+                        <button type="button" onclick="switchExpenseTab('ai')" id="tab-btn-ai"
+                                class="px-3 py-1.5 rounded-lg font-medium transition text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200">
+                            AI Receipt Scanner
+                        </button>
+                    </div>
+                </div>
+
+                <!-- TAB 1: MANUAL FORM -->
+                <div id="expense-manual-pane" class="space-y-4">
+                    <form hx-post="/api/expenses" hx-target="#dashboard-content" hx-swap="innerHTML" class="space-y-4">
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Who Paid?</label>
+                                <select name="payer" required class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+                                    {% for p in participants %}
+                                    <option value="{{ p }}">{{ p }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Currency</label>
+                                <select id="expense-currency" name="currency" onchange="updateExpenseFxPreview('')"
+                                        class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+                                    {% for curr in currencies %}
+                                    <option value="{{ curr }}" {% if curr == 'INR' %}selected{% endif %}>{{ curr }} ({{ currency_symbols[curr] }})</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Amount</label>
+                                <input type="number" step="0.01" min="0.01" id="expense-amount" name="amount" placeholder="0.00" required oninput="updateExpenseFxPreview('')"
+                                       class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+                            </div>
+                        </div>
+
+                        <!-- LIVE FX CONVERSION PREVIEW BANNER -->
+                        <div id="fx-live-box" class="hidden p-3 rounded-xl bg-indigo-50/80 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/20 text-xs transition">
+                            <div id="fx-live-text" class="text-slate-800 dark:text-slate-200 leading-relaxed"></div>
+                            <div id="fx-live-warning" class="hidden mt-1 text-[11px] font-semibold text-amber-600 dark:text-amber-400"></div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Category</label>
+                                <select name="category" class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+                                    {% for cat in categories %}
+                                    <option value="{{ cat }}">{{ cat }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Date</label>
+                                <input type="date" name="date" value="{{ today_date }}" required
+                                       class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Description</label>
+                            <input type="text" name="description" placeholder="e.g. Seafood Dinner at Coastal Harbor" required
+                                   class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-2">Split Between (Beneficiaries)</label>
+                            <div class="flex flex-wrap gap-2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 max-h-36 overflow-y-auto">
+                                {% for p in participants %}
+                                <label class="inline-flex items-center space-x-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer select-none bg-white dark:bg-slate-900 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-indigo-500 transition">
+                                    <input type="checkbox" name="splitters" value="{{ p }}" checked
+                                           class="rounded bg-slate-100 dark:bg-slate-950 border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-0">
+                                    <span>{{ p }}</span>
+                                </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+
+                        <button type="submit"
+                                class="w-full py-2.5 rounded-xl text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition shadow-md shadow-indigo-600/20 flex items-center justify-center space-x-2">
+                            <span>➕ Add Expense</span>
+                        </button>
+                    </form>
+                </div>
+
+                <!-- TAB 2: AI RECEIPT SCANNER -->
+                <div id="expense-ai-pane" class="hidden space-y-4">
+                    <form hx-post="/api/scan-receipt" hx-encoding="multipart/form-data"
+                          hx-target="#receipt-review-container" hx-swap="innerHTML"
+                          hx-indicator="#scan-spinner"
+                          class="space-y-4">
+                        
+                        <div class="border-2 border-dashed border-slate-300 dark:border-slate-800 hover:border-indigo-500/60 rounded-2xl p-6 text-center transition group bg-slate-50/50 dark:bg-slate-950/40">
+                            <div class="flex flex-col items-center justify-center space-y-2">
+                                <span class="p-3 rounded-full bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 text-xl group-hover:scale-110 transition">📸</span>
+                                <div class="text-xs text-slate-800 dark:text-slate-300 font-medium">Upload or snap receipt photo</div>
+                                <p class="text-[11px] text-slate-500">Extracts vendor, amount in ₹, and categories via Gemini 2.5 Flash</p>
+                                <input type="file" name="receipt_file" accept="image/*" required
+                                       class="mt-2 text-xs text-slate-500 file:mr-2 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer">
+                            </div>
+                        </div>
+
+                        <button type="submit"
+                                class="w-full py-2.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 transition shadow-md shadow-indigo-600/25 flex items-center justify-center space-x-2">
+                            <span>✨ Parse with Gemini OCR</span>
+                        </button>
+
+                        <!-- SPINNER -->
+                        <div id="scan-spinner" class="htmx-indicator flex items-center justify-center space-x-2 p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-indigo-600 dark:text-indigo-400">
+                            <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                            </svg>
+                            <span>Gemini is analyzing receipt image...</span>
+                        </div>
+                    </form>
+
+                    <div id="receipt-review-container"></div>
+                </div>
+            </div>
+
+            <!-- CATEGORY BREAKDOWN -->
+            <div class="p-6 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm space-y-4">
+                <h4 class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Spend by Category</h4>
+                <div class="space-y-3">
+                    {% for cat in categories %}
+                    {% set cat_amt = category_spend.get(cat, 0.0) %}
+                    {% set pct = (cat_amt / total_spend * 100) if total_spend > 0 else 0 %}
+                    <div>
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-slate-800 dark:text-slate-300 font-medium">{{ cat }}</span>
+                            <span class="text-slate-600 dark:text-slate-400 font-semibold">₹{{ '{:,.2f}'.format(cat_amt) }} ({{ '%.0f'|format(pct) }}%)</span>
+                        </div>
+                        <div class="w-full h-1.5 bg-slate-100 dark:bg-slate-950 rounded-full overflow-hidden">
+                            <div class="h-full bg-indigo-500 rounded-full" style="width: {{ pct }}%"></div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT: EXPENSE LEDGER -->
+        <div class="lg:col-span-7 space-y-6">
+            
+            <div class="p-6 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-xl space-y-4">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+                    <div>
+                        <h3 class="font-semibold text-slate-900 dark:text-slate-100 flex items-center space-x-2">
+                            <span class="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-500/20">📋</span>
+                            <span>Expense Ledger</span>
+                        </h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">All normalized group expense records</p>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <a href="/api/export/ledger" target="_blank"
+                           class="px-3 py-1.5 rounded-xl text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 transition flex items-center space-x-1.5">
+                            <span>⬇️</span>
+                            <span>Export Ledger (CSV)</span>
+                        </a>
+                    </div>
+                </div>
+
+                {% if not expenses %}
+                <div class="py-12 text-center text-slate-400 text-xs">
+                    No expenses logged yet. Add your first expense on the left or scan a receipt!
+                </div>
+                {% else %}
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs text-slate-700 dark:text-slate-300">
+                        <thead class="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-950/80 border-b border-slate-200 dark:border-slate-800">
+                            <tr>
+                                <th class="py-3 px-3">Date</th>
+                                <th class="py-3 px-3">Description</th>
+                                <th class="py-3 px-3">Category</th>
+                                <th class="py-3 px-3">Payer</th>
+                                <th class="py-3 px-3 text-right">Amount (₹)</th>
+                                <th class="py-3 px-3 text-right">Share / Person</th>
+                                <th class="py-3 px-2 text-center">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-800/60">
+                            {% for e in expenses %}
+                            {% set color = category_colors.get(e.category, {'bg': 'bg-slate-100 dark:bg-slate-800', 'text': 'text-slate-700 dark:text-slate-300', 'border': 'border-slate-200 dark:border-slate-700'}) %}
+                            <tr class="hover:bg-slate-50 dark:hover:bg-slate-950/40 transition">
+                                <td class="py-3 px-3 font-mono text-slate-500 dark:text-slate-400 whitespace-nowrap">{{ e.date }}</td>
+                                <td class="py-3 px-3 font-medium text-slate-900 dark:text-slate-200">
+                                    <div>{{ e.description }}</div>
+                                    <div class="text-[10px] text-slate-500">Split among: {{ e.splitters|join(', ') }}</div>
+                                </td>
+                                <td class="py-3 px-3 whitespace-nowrap">
+                                    <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold border {{ color.bg }} {{ color.text }} {{ color.border }}">
+                                        {{ e.category }}
+                                    </span>
+                                </td>
+                                <td class="py-3 px-3 font-semibold text-slate-800 dark:text-slate-300 whitespace-nowrap">{{ e.payer or 'N/A' }}</td>
+                                <td class="py-3 px-3 text-right font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                                    {% if e.currency != 'INR' %}
+                                    <div>{{ e.original_symbol }}{{ '{:,.2f}'.format(e.original_amount) }}</div>
+                                    <div class="text-[10px] text-slate-500 dark:text-slate-400 font-normal">~₹{{ '{:,.2f}'.format(e.amount) }}</div>
+                                    {% else %}
+                                    ₹{{ '{:,.2f}'.format(e.amount) }}
+                                    {% endif %}
+                                </td>
+                                <td class="py-3 px-3 text-right text-slate-600 dark:text-slate-400 whitespace-nowrap">₹{{ '{:,.2f}'.format(e.per_person_share) }}</td>
+                                <td class="py-3 px-2 text-center whitespace-nowrap">
+                                    <button hx-post="/api/expenses/{{ e.id }}/delete" hx-target="#dashboard-content" hx-swap="innerHTML"
+                                            class="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-500/10 transition" title="Delete Expense">
+                                        🗑️
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- SETTLEMENT ENGINE -->
+            <div class="p-6 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-xl space-y-6">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+                    <div>
+                        <h3 class="font-semibold text-slate-900 dark:text-slate-100 flex items-center space-x-2">
+                            <span class="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20">⚖️</span>
+                            <span>Settlement Engine & Cash-Flow Optimizer</span>
+                        </h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Minimizes multi-party debt mesh into fewest direct bank transfers</p>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <a href="/api/export/settlement" target="_blank"
+                           class="px-3 py-1.5 rounded-xl text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 transition flex items-center space-x-1.5">
+                            <span>⬇️</span>
+                            <span>Export Plan (CSV)</span>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- INDIVIDUAL NET BALANCES -->
+                <div>
+                    <h4 class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">Individual Net Balances</h4>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                        {% for b in balances %}
+                        <div class="min-w-0 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80 flex items-center justify-between hover:border-slate-300 dark:hover:border-slate-700 transition">
+                            <div class="min-w-0 pr-2">
+                                <div class="text-xs font-bold text-slate-900 dark:text-slate-100 truncate" title="{{ b.participant }}">{{ b.participant }}</div>
+                                <div class="text-[10px] text-slate-500 truncate">Paid ₹{{ '{:,.2f}'.format(b.paid) }} · Share ₹{{ '{:,.2f}'.format(b.owed) }}</div>
+                            </div>
+                            <div class="text-right shrink-0">
+                                <div class="text-xs sm:text-sm font-extrabold {% if b.net > 0.01 %}text-emerald-600 dark:text-emerald-400{% elif b.net < -0.01 %}text-rose-600 dark:text-rose-400{% else %}text-slate-500 dark:text-slate-400{% endif %}" title="₹{{ '{:,.2f}'.format(b.net) }}">
+                                    {% if b.net > 0 %}+{% endif %}₹{{ '{:,.2f}'.format(b.net) }}
+                                </div>
+                                <span class="inline-block text-[9px] font-bold uppercase px-2 py-0.5 rounded-full {% if b.net > 0.01 %}bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20{% elif b.net < -0.01 %}bg-rose-50 dark:bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-500/20{% else %}bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400{% endif %}">
+                                    {% if b.net > 0.01 %}Is Owed{% elif b.net < -0.01 %}Must Pay{% else %}Settled{% endif %}
+                                </span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <!-- WHO OWES WHO OPTIMIZED TRANSFERS -->
+                <div>
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                        <div>
+                            <h4 class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center space-x-2">
+                                <span>Optimized Debt Transfers</span>
+                                <span class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/20">
+                                    {{ transactions|length }} Direct Transfers
+                                </span>
+                            </h4>
+                            {% if transactions and settled_count > 0 %}
+                            <div class="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5 flex items-center space-x-1">
+                                <span>✓</span>
+                                <span>{{ settled_count }} of {{ transactions|length }} payments marked settled (₹{{ '{:,.2f}'.format(settled_amount) }})</span>
+                            </div>
+                            {% endif %}
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-[11px] font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 px-2.5 py-0.5 rounded-full border border-amber-200 dark:border-amber-500/20">
+                                {{ saved_transactions }} peer transfers saved ({{ saved_percent }}% reduction)
+                            </span>
+                        </div>
+                    </div>
+
+                    {% if not transactions %}
+                    <div class="p-6 rounded-2xl bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs text-center font-medium space-y-1">
+                        <div class="text-base font-bold">🎉 Group is Fully Balanced!</div>
+                        <div>Zero outstanding debt remaining between travelers.</div>
+                    </div>
+                    {% else %}
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                        {% for t in transactions %}
+                        <div class="p-4 rounded-2xl border transition-all duration-200 flex flex-col justify-between gap-3 group {% if t.get('is_settled') %}bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-700/60 shadow-sm{% else %}bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 shadow-sm{% endif %}">
+                            
+                            <!-- ROW 1: DIRECTIONAL FLOW (DEBTOR ──▶ CREDITOR) -->
+                            <div class="flex items-center justify-between min-w-0 gap-2">
+                                <div class="flex items-center space-x-1.5 min-w-0 flex-1">
+                                    <span class="w-2 h-2 rounded-full bg-rose-500 shrink-0"></span>
+                                    <span class="text-xs font-bold text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10 px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-500/20 truncate max-w-[110px] sm:max-w-[135px]"
+                                          title="{{ t['from'] }}">
+                                        {{ t['from'] }}
+                                    </span>
+                                </div>
+
+                                <div class="flex items-center justify-center px-1 text-slate-400 dark:text-slate-500 group-hover:text-indigo-500 transition font-bold text-xs shrink-0">
+                                    <span>──▶</span>
+                                </div>
+
+                                <div class="flex items-center justify-end space-x-1.5 min-w-0 flex-1">
+                                    <span class="text-xs font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-500/20 truncate max-w-[110px] sm:max-w-[135px]"
+                                          title="{{ t['to'] }}">
+                                        {{ t['to'] }}
+                                    </span>
+                                    <span class="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                                </div>
+                            </div>
+
+                            <!-- ROW 2: AMOUNT & INTERACTIVE SETTLEMENT TICK / BUTTON -->
+                            <div class="pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-3">
+                                <div>
+                                    <div class="text-base font-extrabold font-mono {% if t.get('is_settled') %}line-through text-slate-400 dark:text-slate-500{% else %}text-slate-900 dark:text-slate-100{% endif %}">
+                                        ₹{{ '{:,.2f}'.format(t['amount']) }}
+                                    </div>
+                                    <div class="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                                        {% if t.get('is_settled') %}
+                                        <span class="text-emerald-600 dark:text-emerald-400 font-semibold">✓ Paid {{ t['settled_at'] if t['settled_at'] else '' }}</span>
+                                        {% else %}
+                                        <span>Direct Transfer</span>
+                                        {% endif %}
+                                    </div>
+                                </div>
+
+                                <!-- TOGGLE SETTLED / PENDING BUTTON -->
+                                <form hx-post="/api/settlements/toggle" hx-target="#dashboard-content" hx-swap="innerHTML" class="shrink-0">
+                                    <input type="hidden" name="from_name" value="{{ t['from'] }}">
+                                    <input type="hidden" name="to_name" value="{{ t['to'] }}">
+                                    {% if t.get('is_settled') %}
+                                    <button type="submit"
+                                            title="Click to revert to pending"
+                                            class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-100/80 dark:bg-emerald-500/20 border border-emerald-300 dark:border-emerald-500/30 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/40 dark:hover:text-rose-400 transition cursor-pointer">
+                                        <span>✓</span>
+                                        <span>Settled</span>
+                                    </button>
+                                    {% else %}
+                                    <button type="submit"
+                                            title="Click to mark this payment as settled in cash/UPI"
+                                            class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-emerald-600 hover:text-white hover:border-emerald-600 dark:hover:bg-emerald-600 dark:hover:text-white transition cursor-pointer shadow-sm">
+                                        <span>Mark Paid</span>
+                                        <span>✓</span>
+                                    </button>
+                                    {% endif %}
+                                </form>
+                            </div>
+
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- DEBT MATRIX -->
+                {% if participants|length > 1 %}
+                <div>
+                    <h4 class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Debt Matrix (Rows owe Columns in ₹)</h4>
+                    <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/80 p-2">
+                        <table class="w-full text-center text-xs">
+                            <thead>
+                                <tr class="text-[10px] text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                                    <th class="p-2 text-left font-medium">Debtor \ Creditor</th>
+                                    {% for p in participants %}
+                                    <th class="p-2 font-medium text-slate-700 dark:text-slate-300">{{ p }}</th>
+                                    {% endfor %}
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-200 dark:divide-slate-800/60">
+                                {% for p_row in participants %}
+                                <tr>
+                                    <td class="p-2 text-left font-semibold text-slate-800 dark:text-slate-300 text-xs">{{ p_row }}</td>
+                                    {% for p_col in participants %}
+                                    {% set val = matrix.get(p_row, {}).get(p_col, 0.0) %}
+                                    <td class="p-2 font-mono text-[11px] {% if val > 0 %}text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-500/5{% else %}text-slate-400 dark:text-slate-600{% endif %}">
+                                        {% if val > 0 %}₹{{ '{:,.2f}'.format(val) }}{% else %}—{% endif %}
+                                    </td>
+                                    {% endfor %}
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                {% endif %}
+
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ========================================================================= -->
+<!-- PANE 2: INDIVIDUAL DRILL-DOWN VIEW                                        -->
+<!-- ========================================================================= -->
+<div id="view-individual-pane" class="hidden space-y-6">
+    <div class="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
+        <div>
+            <h3 class="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center space-x-2">
+                <span>👤 Individual Traveler Drill-Down</span>
+            </h3>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Select any traveler to inspect their isolated financial responsibilities and settlement duties</p>
+        </div>
+
+        <!-- TRAVELER SELECTOR CHIPS -->
+        <div class="flex flex-wrap gap-2 pb-3 border-b border-slate-200 dark:border-slate-800">
+            {% for p in participants %}
+            <button type="button" onclick="selectTravelerProfile('{{ p }}')" data-traveler="{{ p }}"
+                    class="traveler-chip-btn px-3.5 py-1.5 rounded-xl text-xs font-medium {% if loop.first %}bg-indigo-600 text-white shadow-sm font-semibold{% else %}bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700{% endif %} transition">
+                {{ p }}
+            </button>
+            {% endfor %}
+        </div>
+
+        <!-- INDIVIDUAL PROFILE CARDS -->
+        {% for p, prof in individual_profiles.items() %}
+        <div id="profile-{{ p }}" class="individual-profile-card space-y-6 {% if not loop.first %}hidden{% endif %}">
+            
+            <!-- PROFILE METRICS -->
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                    <span class="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Total Paid Out-of-Pocket</span>
+                    <div class="text-xl font-bold text-slate-900 dark:text-slate-100">₹{{ '{:,.2f}'.format(prof.paid) }}</div>
+                    <p class="text-[11px] text-slate-500">Paid across {{ prof.paid_count }} purchases</p>
+                </div>
+                <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                    <span class="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Total Fair Share Owed</span>
+                    <div class="text-xl font-bold text-slate-900 dark:text-slate-100">₹{{ '{:,.2f}'.format(prof.owed) }}</div>
+                    <p class="text-[11px] text-slate-500">Benefited from {{ prof.shared_count }} shared expenses</p>
+                </div>
+                <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                    <span class="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Net Standing</span>
+                    <div class="text-xl font-bold {% if prof.net > 0.01 %}text-emerald-600 dark:text-emerald-400{% elif prof.net < -0.01 %}text-rose-600 dark:text-rose-400{% else %}text-slate-600 dark:text-slate-400{% endif %}">
+                        {% if prof.net > 0 %}+{% endif %}₹{{ '{:,.2f}'.format(prof.net) }}
+                    </div>
+                    <span class="inline-block text-[10px] font-bold uppercase px-2 py-0.5 rounded-full {% if prof.net > 0.01 %}bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-400{% elif prof.net < -0.01 %}bg-rose-100 text-rose-800 dark:bg-rose-500/20 dark:text-rose-400{% else %}bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400{% endif %}">
+                        {% if prof.net > 0.01 %}Is Owed Money{% elif prof.net < -0.01 %}Must Pay Debt{% else %}Fully Settled{% endif %}
+                    </span>
+                </div>
+            </div>
+
+            <!-- DIRECT SETTLEMENT ACTIONS FOR THIS TRAVELER -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- MUST SEND MONEY -->
+                <div class="p-5 rounded-2xl bg-rose-50/50 dark:bg-rose-500/5 border border-rose-200 dark:border-rose-500/20 space-y-3">
+                    <h4 class="text-xs font-bold text-rose-700 dark:text-rose-400 uppercase tracking-wider flex items-center space-x-1.5">
+                        <span>📤</span>
+                        <span>Direct Transfers To Send</span>
+                    </h4>
+                    {% if not prof.owes_to %}
+                    <p class="text-xs text-slate-500 italic">No payments to make! {{ p }} has paid their fair share.</p>
+                    {% else %}
+                    <div class="space-y-2">
+                        {% for t in prof.owes_to %}
+                        <div class="p-3 rounded-xl bg-white dark:bg-slate-900 border {% if t.get('is_settled') %}border-emerald-300 dark:border-emerald-800/80 bg-emerald-50/40 dark:bg-emerald-950/20{% else %}border-rose-200 dark:border-rose-500/30{% endif %} flex items-center justify-between text-xs gap-2">
+                            <div class="min-w-0 truncate">
+                                <span class="font-medium text-slate-700 dark:text-slate-300">Pay to <strong class="text-emerald-600 dark:text-emerald-400">{{ t['to'] }}</strong></span>
+                                {% if t.get('is_settled') %}
+                                <span class="ml-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">✓ Settled</span>
+                                {% endif %}
+                            </div>
+                            <span class="font-bold {% if t.get('is_settled') %}line-through text-slate-400 dark:text-slate-500{% else %}text-rose-600 dark:text-rose-400{% endif %} text-sm shrink-0">₹{{ '{:,.2f}'.format(t['amount']) }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- WILL RECEIVE MONEY -->
+                <div class="p-5 rounded-2xl bg-emerald-50/50 dark:bg-emerald-500/5 border border-emerald-200 dark:border-emerald-500/20 space-y-3">
+                    <h4 class="text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider flex items-center space-x-1.5">
+                        <span>📥</span>
+                        <span>Direct Transfers To Receive</span>
+                    </h4>
+                    {% if not prof.receives_from %}
+                    <p class="text-xs text-slate-500 italic">No incoming settlements for {{ p }}.</p>
+                    {% else %}
+                    <div class="space-y-2">
+                        {% for t in prof.receives_from %}
+                        <div class="p-3 rounded-xl bg-white dark:bg-slate-900 border {% if t.get('is_settled') %}border-emerald-300 dark:border-emerald-800/80 bg-emerald-50/40 dark:bg-emerald-950/20{% else %}border-emerald-200 dark:border-emerald-500/30{% endif %} flex items-center justify-between text-xs gap-2">
+                            <div class="min-w-0 truncate">
+                                <span class="font-medium text-slate-700 dark:text-slate-300">Receive from <strong class="text-rose-600 dark:text-rose-400">{{ t['from'] }}</strong></span>
+                                {% if t.get('is_settled') %}
+                                <span class="ml-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">✓ Settled</span>
+                                {% endif %}
+                            </div>
+                            <span class="font-bold {% if t.get('is_settled') %}line-through text-slate-400 dark:text-slate-500{% else %}text-emerald-600 dark:text-emerald-400{% endif %} text-sm shrink-0">₹{{ '{:,.2f}'.format(t['amount']) }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+        </div>
+        {% endfor %}
+
+    </div>
+</div>
+
+{% endif %}

@@ -1,0 +1,96 @@
+<div class="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-indigo-500/40 shadow-2xl space-y-5 animate-fade-in text-slate-900 dark:text-slate-100">
+    <div class="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+        <div class="flex items-center space-x-3">
+            <span class="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/20 text-lg">✨</span>
+            <div>
+                <h4 class="font-semibold text-slate-900 dark:text-slate-100">AI Receipt Parsed</h4>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Review and adjust details before posting to ledger</p>
+            </div>
+        </div>
+        <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20">
+            High Confidence
+        </span>
+    </div>
+
+    <form hx-post="/api/expenses/confirm-receipt" hx-target="#dashboard-content" hx-swap="innerHTML" class="space-y-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="md:col-span-1">
+                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Merchant / Description</label>
+                <input type="text" name="description" value="{{ merchant }} - {{ description }}" required
+                       class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+            </div>
+            <div class="md:col-span-1">
+                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Currency</label>
+                <select id="receipt-expense-currency" name="currency" onchange="updateExpenseFxPreview('receipt-')"
+                        class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+                    {% for curr in currencies %}
+                    <option value="{{ curr }}" {% if curr == currency %}selected{% endif %}>{{ curr }} ({{ currency_symbols[curr] }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="md:col-span-1">
+                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Total Amount</label>
+                <input type="number" step="0.01" min="0.01" id="receipt-expense-amount" name="amount" value="{{ '%.2f'|format(amount) }}" required oninput="updateExpenseFxPreview('receipt-')"
+                       class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+            </div>
+            <div class="md:col-span-1">
+                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Category</label>
+                <select name="category" class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+                    {% for cat in categories %}
+                    <option value="{{ cat }}" {% if cat == category %}selected{% endif %}>{{ cat }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <!-- LIVE FX PREVIEW IN RECEIPT REVIEW -->
+        <div id="receipt-fx-live-box" class="{% if currency == 'INR' %}hidden{% endif %} p-3 rounded-xl bg-indigo-50/80 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/20 text-xs">
+            <div id="receipt-fx-live-text" class="text-slate-800 dark:text-slate-200 leading-relaxed">
+                {% if currency != 'INR' %}
+                💱 <span class="font-semibold">Universal FX Normalization:</span> {{ currency_symbols[currency] }}{{ '%.2f'|format(amount) }} {{ currency }} will be converted to <strong class="text-emerald-600 dark:text-emerald-400">INR (₹)</strong> upon adding.
+                {% endif %}
+            </div>
+            <div id="receipt-fx-live-warning" class="hidden mt-1 text-[11px] font-semibold text-amber-600 dark:text-amber-400"></div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Date</label>
+                <input type="date" name="date" value="{{ date }}" required
+                       class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Who Paid?</label>
+                <select name="payer" class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+                    {% for p in participants %}
+                    <option value="{{ p }}">{{ p }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div>
+            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-2">Split Between (Beneficiaries)</label>
+            <div class="flex flex-wrap gap-2.5 p-3 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800">
+                {% for p in participants %}
+                <label class="inline-flex items-center space-x-2 text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer select-none">
+                    <input type="checkbox" name="splitters" value="{{ p }}" checked
+                           class="rounded bg-slate-100 dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-slate-900">
+                    <span>{{ p }}</span>
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end space-x-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+            <button type="button" onclick="document.getElementById('receipt-review-container').innerHTML = ''"
+                    class="px-4 py-2 rounded-xl text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+                Discard
+            </button>
+            <button type="submit"
+                    class="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition shadow-md shadow-indigo-600/20">
+                Confirm & Add to Ledger
+            </button>
+        </div>
+    </form>
+</div>

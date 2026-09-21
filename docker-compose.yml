@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  tripsplit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tripsplit_ai
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - DATABASE_URL=sqlite:///./tripsplit.db
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    volumes:
+      # Persist SQLite database across container recreations
+      - ./tripsplit.db:/app/tripsplit.db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

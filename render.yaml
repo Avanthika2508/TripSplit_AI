@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: tripsplit-ai
+    runtime: python
+    region: oregon
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DATABASE_URL
+        value: sqlite:///./tripsplit.db
+      - key: GOOGLE_API_KEY
+        sync: false
