@@ -7,3 +7,7 @@ google-generativeai
 python-multipart
 pillow
 sqlalchemy>=2.0.0
+bcrypt
+passlib
+psycopg2-binary
+itsdangerous

@@ -1,4 +1,4 @@
-<!-- OUT-OF-BAND SWAPS FOR SIDEBAR & HEADER SYNC -->
+<!-- OUT-OF-BAND SWAPS FOR SIDEBAR, HEADER & INVITE MODAL SYNC -->
 <div id="trip-selector-container" hx-swap-oob="true" class="space-y-2 p-3 rounded-2xl bg-slate-100/80 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800">
     <div class="flex items-center justify-between">
         <span class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Active Trip</span>
@@ -21,11 +21,15 @@
     {% if active_trip %}
     <div class="flex items-center justify-between text-[10px] text-slate-400 pt-1">
         <span>Created: {{ active_trip.created_at.strftime('%b %d') }}</span>
+        {% if is_host %}
         <button hx-post="/api/trips/{{ active_trip.id }}/delete" hx-target="#dashboard-content" hx-swap="innerHTML"
                 hx-confirm="Are you sure you want to delete this entire trip and all its expenses?"
                 class="text-rose-500 hover:underline">
             Delete Trip
         </button>
+        {% else %}
+        <span class="text-indigo-500 font-semibold">💼 Member</span>
+        {% endif %}
     </div>
     {% endif %}
     {% else %}
@@ -37,6 +41,55 @@
     <span>✈️</span>
     <span>{{ active_trip.name if active_trip else 'No Trip Active' }}</span>
 </span>
+
+<div id="header-invite-btn-container" hx-swap-oob="true" class="inline-flex">
+    {% if active_trip and join_code %}
+    <button type="button" onclick="openInviteModal('{{ join_code }}')"
+            class="px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-xs font-bold flex items-center space-x-1.5 transition shadow-sm shadow-indigo-600/30">
+        <span>👥</span>
+        <span class="hidden sm:inline">Invite Collaborators</span>
+        <span class="text-[10px] bg-white/20 px-1.5 py-0.5 rounded font-mono">{{ join_code }}</span>
+    </button>
+    {% endif %}
+</div>
+
+<div id="sidebar-invite-btn-container" hx-swap-oob="true">
+    {% if active_trip and join_code %}
+    <button type="button" onclick="openInviteModal('{{ join_code }}')"
+            class="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 transition shadow-md shadow-indigo-600/20 flex items-center justify-center space-x-2">
+        <span>👥</span>
+        <span>Invite Collaborators ({{ join_code }})</span>
+    </button>
+    {% endif %}
+</div>
+
+<div id="modal-room-code" hx-swap-oob="true" class="text-3xl sm:text-4xl font-black font-mono tracking-widest text-slate-900 dark:text-slate-100 select-all">
+    {{ join_code or 'TS-NONE' }}
+</div>
+
+<input type="text" id="modal-invite-url" hx-swap-oob="true" readonly value="{{ invite_url }}"
+       class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-mono text-slate-900 dark:text-slate-100 select-all outline-none">
+
+<span id="modal-collaborators-count" hx-swap-oob="true" class="text-indigo-600 dark:text-indigo-400 font-mono">{{ trip_members|length }} Joined</span>
+
+<div id="modal-members-container" hx-swap-oob="true" class="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+    {% for m in trip_members %}
+    <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/80 text-xs">
+        <div class="flex items-center space-x-2.5">
+            <div class="w-7 h-7 rounded-lg bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 font-bold text-xs flex items-center justify-center">
+                {{ m.user.full_name[:1] | upper }}
+            </div>
+            <div>
+                <div class="font-bold text-slate-800 dark:text-slate-200">{{ m.user.full_name }}</div>
+                <div class="text-[10px] text-slate-400">{{ m.user.email }}</div>
+            </div>
+        </div>
+        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full {% if m.role == 'host' %}bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-400 border border-amber-300 dark:border-amber-500/30{% else %}bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-500/30{% endif %}">
+            {% if m.role == 'host' %}👑 Host{% else %}💼 Member{% endif %}
+        </span>
+    </div>
+    {% endfor %}
+</div>
 
 <div id="participants-container" hx-swap-oob="true" class="space-y-1.5 max-h-48 overflow-y-auto pr-1">
     {% for p in participants %}
@@ -152,6 +205,67 @@
 <!-- ACTIVE DASHBOARD VIEW                                                     -->
 <!-- ========================================================================= -->
 
+<!-- TRIP COLLABORATION WORKSPACE & CO-TRAVELERS CARD -->
+<div class="p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-xl space-y-4">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+        <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-violet-500 text-white flex items-center justify-center shadow-md shadow-indigo-600/20 shrink-0">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+            </div>
+            <div>
+                <div class="flex items-center space-x-2">
+                    <h3 class="font-bold text-slate-900 dark:text-slate-100 text-sm sm:text-base">Trip Collaboration Workspace</h3>
+                    <span class="inline-flex items-center space-x-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <span>Workspace Active</span>
+                    </span>
+                </div>
+                <p class="text-xs text-slate-500 dark:text-slate-400">All members can collaborate to log expenses, review receipts, and settle balances</p>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-2">
+            <!-- PASSCODE PILL -->
+            <div id="dashboard-workspace-key" data-code="{{ join_code }}" class="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-mono font-bold text-slate-800 dark:text-slate-200">
+                <span class="text-slate-400 text-[10px] uppercase font-sans">Passcode:</span>
+                <span id="current-join-code-val" class="text-indigo-600 dark:text-indigo-400 tracking-wider">{{ join_code }}</span>
+            </div>
+            <button type="button" onclick="openInviteModal('{{ join_code }}')"
+                    class="px-3.5 py-1.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition shadow-sm shadow-indigo-600/20 flex items-center space-x-1.5">
+                <span>👥</span>
+                <span>Invite Collaborators</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ACTIVE WORKSPACE MEMBERS -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+        {% for m in trip_members %}
+        <div class="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800/80 text-xs">
+            <div class="flex items-center space-x-2.5 min-w-0">
+                <div class="w-8 h-8 rounded-xl bg-gradient-to-tr {% if m.role == 'host' %}from-amber-500 to-orange-500 text-white{% else %}from-indigo-600 to-violet-500 text-white{% endif %} font-bold text-xs flex items-center justify-center shrink-0 shadow-sm">
+                    {{ m.user.full_name[:1] | upper }}
+                </div>
+                <div class="min-w-0">
+                    <div class="font-bold text-slate-900 dark:text-slate-100 truncate flex items-center space-x-1">
+                        <span>{{ m.user.full_name }}</span>
+                        {% if current_user and current_user.id == m.user_id %}
+                        <span class="text-[9px] text-indigo-500 dark:text-indigo-400 font-semibold">(You)</span>
+                        {% endif %}
+                    </div>
+                    <div class="text-[10px] text-slate-400 truncate">{{ m.user.email }}</div>
+                </div>
+            </div>
+            <span class="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full {% if m.role == 'host' %}bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-400 border border-amber-300 dark:border-amber-500/30{% else %}bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-300 dark:border-slate-700{% endif %} ml-2">
+                {% if m.role == 'host' %}👑 Host{% else %}💼 Member{% endif %}
+            </span>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
 <!-- TOP CONTROLS: VIEW SWITCHER -->
 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
     <div class="flex items-center space-x-2">
@@ -197,20 +311,20 @@
         <p class="text-xs text-slate-500 dark:text-slate-400 mt-2 truncate">Across 5 categories</p>
     </div>
 
-    <div class="min-w-0 p-5 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-lg relative overflow-hidden group hover:border-slate-300 dark:hover:border-slate-700 transition">
+    <div class="min-w-0 p-5 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-lg relative overflow-hidden group hover:border-slate-300 dark:hover:border-slate-700 transition flex flex-col justify-between">
         <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Trip Spend</span>
-        <div class="text-xl sm:text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1 flex items-baseline justify-between">
-            <span class="truncate" title="₹{{ '{:,.2f}'.format(total_spend) }}">₹{{ '{:,.2f}'.format(total_spend) }}</span>
-            <span class="text-xs text-emerald-600 dark:text-emerald-400 font-semibold bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-500/20 shrink-0 ml-1">INR (₹)</span>
+        <div class="mt-1.5 flex flex-wrap items-baseline justify-between gap-1.5">
+            <span class="text-lg sm:text-xl lg:text-2xl font-black text-emerald-600 dark:text-emerald-400 tracking-tight break-words" title="₹{{ '{:,.2f}'.format(total_spend) }}">₹{{ '{:,.2f}'.format(total_spend) }}</span>
+            <span class="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-500/20 shrink-0">INR (₹)</span>
         </div>
         <p class="text-xs text-slate-500 dark:text-slate-400 mt-2 truncate">Total combined spend</p>
     </div>
 
-    <div class="min-w-0 p-5 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-lg relative overflow-hidden group hover:border-slate-300 dark:hover:border-slate-700 transition">
+    <div class="min-w-0 p-5 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/80 shadow-sm dark:shadow-lg relative overflow-hidden group hover:border-slate-300 dark:hover:border-slate-700 transition flex flex-col justify-between">
         <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Avg Spend / Person</span>
-        <div class="text-xl sm:text-2xl font-bold text-purple-600 dark:text-purple-400 mt-1 flex items-baseline justify-between">
-            <span class="truncate" title="₹{{ '{:,.2f}'.format(avg_spend) }}">₹{{ '{:,.2f}'.format(avg_spend) }}</span>
-            <span class="text-xs text-purple-600 dark:text-purple-400 font-semibold bg-purple-50 dark:bg-purple-500/10 px-2 py-0.5 rounded-full border border-purple-200 dark:border-purple-500/20 shrink-0 ml-1">Fair Share</span>
+        <div class="mt-1.5 flex flex-wrap items-baseline justify-between gap-1.5">
+            <span class="text-lg sm:text-xl lg:text-2xl font-black text-purple-600 dark:text-purple-400 tracking-tight break-words" title="₹{{ '{:,.2f}'.format(avg_spend) }}">₹{{ '{:,.2f}'.format(avg_spend) }}</span>
+            <span class="text-[10px] text-purple-600 dark:text-purple-400 font-bold bg-purple-50 dark:bg-purple-500/10 px-2 py-0.5 rounded-full border border-purple-200 dark:border-purple-500/20 shrink-0">Fair Share</span>
         </div>
         <p class="text-xs text-slate-500 dark:text-slate-400 mt-2 truncate">Per-traveler baseline</p>
     </div>
@@ -336,11 +450,17 @@
                         <div class="grid grid-cols-2 gap-3">
                             <div>
                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Category</label>
-                                <select name="category" class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none">
+                                <select name="category" onchange="handleCategoryChange(this, 'manual-custom-cat-box', 'manual-custom-cat-input')"
+                                        class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition outline-none cursor-pointer">
                                     {% for cat in categories %}
                                     <option value="{{ cat }}">{{ cat }}</option>
                                     {% endfor %}
+                                    <option value="Custom">➕ Custom...</option>
                                 </select>
+                                <div id="manual-custom-cat-box" class="hidden mt-2">
+                                    <input type="text" name="custom_category" id="manual-custom-cat-input" placeholder="Type custom category..."
+                                           class="w-full bg-slate-50 dark:bg-slate-950 border border-indigo-400 dark:border-indigo-500/80 rounded-xl px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:ring-1 focus:ring-indigo-500 outline-none transition placeholder-slate-400">
+                                </div>
                             </div>
                             <div>
                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Date</label>
@@ -418,13 +538,17 @@
                     {% for cat in categories %}
                     {% set cat_amt = category_spend.get(cat, 0.0) %}
                     {% set pct = (cat_amt / total_spend * 100) if total_spend > 0 else 0 %}
+                    {% set col = category_colors.get(cat, {}) %}
                     <div>
                         <div class="flex justify-between text-xs mb-1">
-                            <span class="text-slate-800 dark:text-slate-300 font-medium">{{ cat }}</span>
+                            <span class="text-slate-800 dark:text-slate-300 font-medium flex items-center space-x-1.5">
+                                <span class="w-2 h-2 rounded-full {{ col.bar or 'bg-indigo-500' }}"></span>
+                                <span>{{ cat }}</span>
+                            </span>
                             <span class="text-slate-600 dark:text-slate-400 font-semibold">₹{{ '{:,.2f}'.format(cat_amt) }} ({{ '%.0f'|format(pct) }}%)</span>
                         </div>
                         <div class="w-full h-1.5 bg-slate-100 dark:bg-slate-950 rounded-full overflow-hidden">
-                            <div class="h-full bg-indigo-500 rounded-full" style="width: {{ pct }}%"></div>
+                            <div class="h-full {{ col.bar or 'bg-indigo-500' }} rounded-full transition-all duration-300" style="width: {{ pct }}%"></div>
                         </div>
                     </div>
                     {% endfor %}

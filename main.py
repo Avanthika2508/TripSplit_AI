@@ -1,31 +1,46 @@
 """
-TripSplit AI - Production FinTech SaaS Architecture (INR Standard + Zero-State)
-================================================================================
-Group expense tracking, multi-currency normalization to Indian Rupees (₹),
-AI-powered receipt parsing, algorithmic min-cash-flow debt simplification,
-gamified achievements, spending health analytics, and persistent SQLite backend.
+TripSplit AI - Production FinTech Collaborative SaaS Architecture
+===================================================================================
+Features:
+1. User Authentication (Registration, Login, Password Hashing via bcrypt, signed session tokens).
+2. Supabase / PostgreSQL Support via DATABASE_URL with automatic SQLite fallback.
+3. Trip Collaboration Workspace & Shareable Access Keys (/join/{join_code}).
+4. Collaborative Permissions (Host vs Member) and Multi-Tenant Trip Isolation.
+5. Multimodal Receipt Parsing via Google Gemini Flash.
+6. Algorithmic Min-Cash-Flow Cash-Flow Optimization.
+7. Universal Multi-Currency Normalization to Indian Rupees (₹).
+8. Gamified Achievements, Spend Velocity Health Meter, and Expense Ledger.
 """
 
 import io
 import os
 import csv
 import json
+import secrets
+import string
+import logging
+import urllib.parse
 import datetime as dt
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import List, Optional, Generator, Dict, Any
 
-import pandas as pd
-import numpy as np
+import bcrypt
+from itsdangerous import URLSafeTimedSerializer
 from PIL import Image
-from fastapi import FastAPI, Request, Form, UploadFile, File, Depends, Response, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, Request, Form, UploadFile, File, Depends, Response, HTTPException, status
+from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, ForeignKey, UniqueConstraint
+from sqlalchemy import (
+    create_engine, Column, Integer, String, Float, DateTime, Boolean,
+    ForeignKey, UniqueConstraint, text
+)
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 
+logger = logging.getLogger("tripsplit")
+
 # ------------------------------------------------------------------------------
-# Google GenAI SDK Support (with dual-sdk resilience)
+# Google GenAI SDK Support (dual-sdk resilience)
 # ------------------------------------------------------------------------------
 LEGACY_GENAI_AVAILABLE = False
 NEW_GENAI_AVAILABLE = False
@@ -69,34 +84,74 @@ def normalize_to_inr(amount: float, currency: str) -> float:
     return round(float(amount) * rate, 2)
 
 # ------------------------------------------------------------------------------
-# SQLALCHEMY ORM & DATABASE PERSISTENCE LAYER (TRIP-SCOPED)
+# SQLALCHEMY ORM & SUPABASE / POSTGRESQL / SQLITE PERSISTENCE LAYER
 # ------------------------------------------------------------------------------
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./tripsplit.db")
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
-)
+raw_db_url = os.environ.get("DATABASE_URL", "sqlite:///./tripsplit.db")
+if raw_db_url.startswith("postgres://"):
+    # SQLAlchemy 1.4+ requires postgresql://
+    raw_db_url = raw_db_url.replace("postgres://", "postgresql://", 1)
+DATABASE_URL = raw_db_url
+
+connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+
+class UserModel(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    full_name = Column(String(100), nullable=False)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    hosted_trips = relationship("TripModel", back_populates="host_user", foreign_keys="TripModel.host_user_id")
+    memberships = relationship("TripMemberModel", back_populates="user", cascade="all, delete-orphan")
+    created_expenses = relationship("ExpenseModel", back_populates="created_by_user")
 
 
 class TripModel(Base):
     __tablename__ = "trips"
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    currency = Column(String, default="INR", nullable=False)
+    name = Column(String(255), nullable=False)
+    host_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    join_code = Column(String(32), unique=True, index=True, nullable=False)
+    base_currency = Column(String(10), default="INR", nullable=False)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
-    participants = relationship("ParticipantModel", back_populates="trip", cascade="all, delete-orphan")
+    host_user = relationship("UserModel", back_populates="hosted_trips", foreign_keys=[host_user_id])
+    members = relationship("TripMemberModel", back_populates="trip", cascade="all, delete-orphan")
     expenses = relationship("ExpenseModel", back_populates="trip", cascade="all, delete-orphan")
-    settlements = relationship("SettlementModel", back_populates="trip", cascade="all, delete-orphan")
+    settlements = relationship("SettlementStatusModel", back_populates="trip", cascade="all, delete-orphan")
+    participants = relationship("ParticipantModel", back_populates="trip", cascade="all, delete-orphan")
+
+    @property
+    def currency(self) -> str:
+        return self.base_currency
+
+
+class TripMemberModel(Base):
+    __tablename__ = "trip_members"
+    id = Column(Integer, primary_key=True, index=True)
+    trip_id = Column(Integer, ForeignKey("trips.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(20), default="member", nullable=False)  # 'host' or 'member'
+    joined_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    trip = relationship("TripModel", back_populates="members")
+    user = relationship("UserModel", back_populates="memberships")
+
+    __table_args__ = (
+        UniqueConstraint("trip_id", "user_id", name="uix_trip_member"),
+    )
 
 
 class ParticipantModel(Base):
     __tablename__ = "participants"
     id = Column(Integer, primary_key=True, index=True)
     trip_id = Column(Integer, ForeignKey("trips.id", ondelete="CASCADE"), nullable=False, index=True)
-    name = Column(String, nullable=False, index=True)
+    name = Column(String(100), nullable=False, index=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
     trip = relationship("TripModel", back_populates="participants")
@@ -110,24 +165,35 @@ class ExpenseModel(Base):
     __tablename__ = "expenses"
     id = Column(Integer, primary_key=True, index=True)
     trip_id = Column(Integer, ForeignKey("trips.id", ondelete="CASCADE"), nullable=False, index=True)
-    date = Column(String, nullable=False)  # YYYY-MM-DD
-    payer = Column(String, nullable=True)
-    original_amount = Column(Float, nullable=False)
-    currency = Column(String, default="INR", nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    payer_name = Column(String(100), nullable=False)
     amount = Column(Float, nullable=False)  # Normalized to INR (₹)
-    category = Column(String, default="Misc", nullable=False)
-    description = Column(String, nullable=False)
-    splitters = Column(String, nullable=False)  # JSON-encoded array of participant names
+    original_amount = Column(Float, nullable=False)
+    currency = Column(String(10), default="INR", nullable=False)
+    category = Column(String(50), default="Miscellaneous", nullable=False)
+    description = Column(String(255), default="", nullable=False)
+    beneficiaries_json = Column(String, nullable=False)  # JSON-encoded array of participant names
+    date = Column(String(20), nullable=False)  # YYYY-MM-DD
+    receipt_url = Column(String(500), nullable=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
     trip = relationship("TripModel", back_populates="expenses")
+    created_by_user = relationship("UserModel", back_populates="created_expenses")
+
+    @property
+    def payer(self) -> str:
+        return self.payer_name
+
+    @property
+    def splitters(self) -> str:
+        return self.beneficiaries_json
 
     @property
     def splitters_list(self) -> List[str]:
         try:
-            return json.loads(self.splitters)
+            return json.loads(self.beneficiaries_json)
         except Exception:
-            return [s.strip() for s in self.splitters.split(",") if s.strip()]
+            return [s.strip() for s in self.beneficiaries_json.split(",") if s.strip()]
 
     @property
     def split_count(self) -> int:
@@ -142,19 +208,28 @@ class ExpenseModel(Base):
         return CURRENCY_SYMBOLS.get(self.currency, "₹")
 
 
-class SettlementModel(Base):
+class SettlementStatusModel(Base):
     __tablename__ = "settlements"
     id = Column(Integer, primary_key=True, index=True)
     trip_id = Column(Integer, ForeignKey("trips.id", ondelete="CASCADE"), nullable=False, index=True)
-    from_name = Column(String, nullable=False)
-    to_name = Column(String, nullable=False)
+    from_user = Column(String(100), nullable=False)
+    to_user = Column(String(100), nullable=False)
+    amount = Column(Float, default=0.0, nullable=False)
     is_settled = Column(Boolean, default=False, nullable=False)
     settled_at = Column(DateTime, nullable=True)
 
     trip = relationship("TripModel", back_populates="settlements")
 
+    @property
+    def from_name(self) -> str:
+        return self.from_user
+
+    @property
+    def to_name(self) -> str:
+        return self.to_user
+
     __table_args__ = (
-        UniqueConstraint("trip_id", "from_name", "to_name", name="uix_trip_settlement"),
+        UniqueConstraint("trip_id", "from_user", "to_user", name="uix_trip_settlement_status"),
     )
 
 
@@ -167,8 +242,45 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db():
-    """Zero-State Initializer: strictly creates tables without pre-populating any data."""
+    """Zero-State Initializer: strictly creates tables and upgrades schema if necessary."""
     Base.metadata.create_all(bind=engine)
+    if "sqlite" in DATABASE_URL:
+        with engine.connect() as conn:
+            try:
+                res = conn.execute(text("PRAGMA table_info(trips);")).fetchall()
+                cols = [r[1] for r in res]
+                if len(cols) > 0 and "host_user_id" not in cols:
+                    conn.execute(text("DROP TABLE IF EXISTS settlements;"))
+                    conn.execute(text("DROP TABLE IF EXISTS expenses;"))
+                    conn.execute(text("DROP TABLE IF EXISTS participants;"))
+                    conn.execute(text("DROP TABLE IF EXISTS trip_members;"))
+                    conn.execute(text("DROP TABLE IF EXISTS trips;"))
+                    conn.execute(text("DROP TABLE IF EXISTS users;"))
+                    conn.commit()
+                    Base.metadata.create_all(bind=engine)
+                else:
+                    # Check if description column exists in expenses
+                    res_exp = conn.execute(text("PRAGMA table_info(expenses);")).fetchall()
+                    exp_cols = [r[1] for r in res_exp]
+                    if len(exp_cols) > 0 and "description" not in exp_cols:
+                        conn.execute(text("ALTER TABLE expenses ADD COLUMN description VARCHAR(255) DEFAULT '';"))
+                        conn.commit()
+            except Exception as e:
+                logger.warning(f"SQLite migration check notice: {e}")
+
+    # Backfill any trips that lack a join_code or have an invalid one
+    with SessionLocal() as db:
+        try:
+            trips = db.query(TripModel).all()
+            updated = False
+            for t in trips:
+                if not t.join_code or not str(t.join_code).strip():
+                    t.join_code = generate_join_code(db)
+                    updated = True
+            if updated:
+                db.commit()
+        except Exception as e:
+            logger.warning(f"Passcode backfill notice: {e}")
 
 
 @asynccontextmanager
@@ -178,21 +290,156 @@ async def lifespan(app: FastAPI):
 
 
 # ------------------------------------------------------------------------------
-# APP & TEMPLATES SETUP
+# SECURITY, AUTHENTICATION & SESSIONS
 # ------------------------------------------------------------------------------
-app = FastAPI(title="TripSplit AI", description="FinTech Expense & Settlement Optimization in INR", lifespan=lifespan)
+SECRET_KEY = os.environ.get("SECRET_KEY", "tripsplit-super-secret-production-key-9921")
+session_serializer = URLSafeTimedSerializer(SECRET_KEY, salt="tripsplit-auth-session")
 
-TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
-templates = Jinja2Templates(directory=TEMPLATES_DIR)
+def hash_password(password: str) -> str:
+    """Hash password using bcrypt."""
+    salt = bcrypt.gensalt(rounds=12)
+    return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
 
-CATEGORIES = ["Food", "Lodging", "Transit", "Activities", "Misc"]
+def verify_password(password: str, hashed_password: str) -> bool:
+    """Verify password against bcrypt hash."""
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), hashed_password.encode("utf-8"))
+    except Exception:
+        return False
+
+def create_session_token(user_id: int) -> str:
+    """Generate signed, tamper-proof session token."""
+    return session_serializer.dumps({"uid": user_id})
+
+def get_user_id_from_token(token: str) -> Optional[int]:
+    """Verify and extract user_id from signed session token."""
+    try:
+        data = session_serializer.loads(token, max_age=30 * 86400)  # 30-day session
+        return data.get("uid")
+    except Exception:
+        return None
+
+def get_current_user_optional(request: Request, db: Session) -> Optional[UserModel]:
+    """Retrieve logged-in user from session cookie if present."""
+    token = request.cookies.get("tripsplit_session")
+    if not token:
+        return None
+    user_id = get_user_id_from_token(token)
+    if not user_id:
+        return None
+    return db.query(UserModel).filter(UserModel.id == user_id).first()
+
+def get_current_user(request: Request, db: Session = Depends(get_db)) -> UserModel:
+    """Enforce authentication dependency. Redirects unauthenticated requests to /login."""
+    user = get_current_user_optional(request, db)
+    if not user:
+        if request.headers.get("hx-request"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                headers={"HX-Redirect": "/login"}
+            )
+        next_path = str(request.url.path)
+        if request.url.query:
+            next_path += f"?{request.url.query}"
+        raise HTTPException(
+            status_code=status.HTTP_303_SEE_OTHER,
+            headers={"Location": f"/login?next={urllib.parse.quote(next_path)}"}
+        )
+    return user
+
+# 32 unambiguous characters (excludes 0, O, 1, I to prevent transcription errors)
+PASSCODE_CHARSET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+def generate_join_code(db: Session) -> str:
+    """Generate unique uppercase workspace access key, format TS-<5 ALPHANUMERIC CHARS> avoiding ambiguous characters (0, O, 1, I)."""
+    for _ in range(100):
+        suffix = "".join(secrets.choice(PASSCODE_CHARSET) for _ in range(5))
+        code = f"TS-{suffix}"
+        exists = db.query(TripModel).filter(TripModel.join_code == code).first()
+        if not exists:
+            return code
+    suffix = "".join(secrets.choice(PASSCODE_CHARSET) for _ in range(6))
+    return f"TS-{suffix}"
+
+
+# ------------------------------------------------------------------------------
+# CATEGORIES & COLOR PALETTE
+# ------------------------------------------------------------------------------
+DEFAULT_CATEGORIES = [
+    "Food & Dining",
+    "Accommodation",
+    "Transport & Fuel",
+    "Entertainment",
+    "Shopping",
+    "Utilities",
+    "Groceries",
+    "Miscellaneous",
+]
+
+CATEGORY_PALETTE = [
+    {"bg": "bg-emerald-50 dark:bg-emerald-500/10", "bar": "bg-emerald-500", "text": "text-emerald-700 dark:text-emerald-400", "border": "border-emerald-200 dark:border-emerald-500/20"},
+    {"bg": "bg-blue-50 dark:bg-blue-500/10", "bar": "bg-blue-500", "text": "text-blue-700 dark:text-blue-400", "border": "border-blue-200 dark:border-blue-500/20"},
+    {"bg": "bg-purple-50 dark:bg-purple-500/10", "bar": "bg-purple-500", "text": "text-purple-700 dark:text-purple-400", "border": "border-purple-200 dark:border-purple-500/20"},
+    {"bg": "bg-amber-50 dark:bg-amber-500/10", "bar": "bg-amber-500", "text": "text-amber-700 dark:text-amber-400", "border": "border-amber-200 dark:border-amber-500/20"},
+    {"bg": "bg-pink-50 dark:bg-pink-500/10", "bar": "bg-pink-500", "text": "text-pink-700 dark:text-pink-400", "border": "border-pink-200 dark:border-pink-500/20"},
+    {"bg": "bg-cyan-50 dark:bg-cyan-500/10", "bar": "bg-cyan-500", "text": "text-cyan-700 dark:text-cyan-400", "border": "border-cyan-200 dark:border-cyan-500/20"},
+    {"bg": "bg-orange-50 dark:bg-orange-500/10", "bar": "bg-orange-500", "text": "text-orange-700 dark:text-orange-400", "border": "border-orange-200 dark:border-orange-500/20"},
+    {"bg": "bg-rose-50 dark:bg-rose-500/10", "bar": "bg-rose-500", "text": "text-rose-700 dark:text-rose-400", "border": "border-rose-200 dark:border-rose-500/20"},
+    {"bg": "bg-teal-50 dark:bg-teal-500/10", "bar": "bg-teal-500", "text": "text-teal-700 dark:text-teal-400", "border": "border-teal-200 dark:border-teal-500/20"},
+    {"bg": "bg-indigo-50 dark:bg-indigo-500/10", "bar": "bg-indigo-500", "text": "text-indigo-700 dark:text-indigo-400", "border": "border-indigo-200 dark:border-indigo-500/20"},
+    {"bg": "bg-lime-50 dark:bg-lime-500/10", "bar": "bg-lime-500", "text": "text-lime-700 dark:text-lime-400", "border": "border-lime-200 dark:border-lime-500/20"},
+    {"bg": "bg-slate-50 dark:bg-slate-500/10", "bar": "bg-slate-500", "text": "text-slate-700 dark:text-slate-400", "border": "border-slate-200 dark:border-slate-500/20"},
+]
+
 CATEGORY_COLORS = {
-    "Food": {"bg": "bg-amber-500/10 dark:bg-amber-500/15", "text": "text-amber-600 dark:text-amber-400", "border": "border-amber-500/20"},
-    "Lodging": {"bg": "bg-blue-500/10 dark:bg-blue-500/15", "text": "text-blue-600 dark:text-blue-400", "border": "border-blue-500/20"},
-    "Transit": {"bg": "bg-emerald-500/10 dark:bg-emerald-500/15", "text": "text-emerald-600 dark:text-emerald-400", "border": "border-emerald-500/20"},
-    "Activities": {"bg": "bg-rose-500/10 dark:bg-rose-500/15", "text": "text-rose-600 dark:text-rose-400", "border": "border-rose-500/20"},
-    "Misc": {"bg": "bg-purple-500/10 dark:bg-purple-500/15", "text": "text-purple-600 dark:text-purple-400", "border": "border-purple-500/20"},
+    "Food & Dining": CATEGORY_PALETTE[0],
+    "Accommodation": CATEGORY_PALETTE[1],
+    "Transport & Fuel": CATEGORY_PALETTE[2],
+    "Entertainment": CATEGORY_PALETTE[3],
+    "Shopping": CATEGORY_PALETTE[4],
+    "Utilities": CATEGORY_PALETTE[5],
+    "Groceries": CATEGORY_PALETTE[8],
+    "Miscellaneous": CATEGORY_PALETTE[11],
 }
+
+def get_category_color(category: str) -> Dict[str, str]:
+    """Return styling classes for category, using deterministic hashing for custom categories."""
+    if category in CATEGORY_COLORS:
+        return CATEGORY_COLORS[category]
+    idx = abs(hash(category)) % len(CATEGORY_PALETTE)
+    return CATEGORY_PALETTE[idx]
+
+def normalize_category_name(category: Optional[str], custom_category: Optional[str] = None) -> str:
+    """Normalize category selection, supporting custom user inputs."""
+    raw = (category or "").strip()
+    if raw.lower() in ("custom", "custom...", "other"):
+        if custom_category and custom_category.strip():
+            return custom_category.strip().title()
+        return "Miscellaneous"
+
+    mapping = {
+        "food": "Food & Dining",
+        "food & dining": "Food & Dining",
+        "dining": "Food & Dining",
+        "lodging": "Accommodation",
+        "accommodation": "Accommodation",
+        "hotel": "Accommodation",
+        "transit": "Transport & Fuel",
+        "transport": "Transport & Fuel",
+        "transport & fuel": "Transport & Fuel",
+        "fuel": "Transport & Fuel",
+        "activities": "Entertainment",
+        "entertainment": "Entertainment",
+        "shopping": "Shopping",
+        "utilities": "Utilities",
+        "utility": "Utilities",
+        "groceries": "Groceries",
+        "grocery": "Groceries",
+        "misc": "Miscellaneous",
+        "miscellaneous": "Miscellaneous",
+    }
+    normalized = mapping.get(raw.lower(), raw)
+    return normalized if normalized else "Miscellaneous"
 
 GLOBAL_API_KEY_OVERRIDE: str = ""
 
@@ -209,7 +456,6 @@ def get_effective_api_key(override: Optional[str] = None) -> str:
 # GAMIFIED ACHIEVEMENTS & SPENDING HEALTH ANALYTICS
 # ------------------------------------------------------------------------------
 def compute_achievements(participants: List[str], expenses_models: List[ExpenseModel], balances: List[dict]) -> List[dict]:
-    """Calculate fun dynamic badges based on group spending patterns."""
     if not participants or not expenses_models:
         return []
 
@@ -273,7 +519,6 @@ def compute_achievements(participants: List[str], expenses_models: List[ExpenseM
 
 
 def compute_spending_health(total_spend: float, num_participants: int, num_expenses: int) -> dict:
-    """Analyze group spend velocity and return visual progress meter metrics."""
     if num_participants == 0:
         return {
             "status": "Awaiting Travelers",
@@ -327,33 +572,44 @@ def compute_spending_health(total_spend: float, num_participants: int, num_expen
 # ------------------------------------------------------------------------------
 # FINANCIAL & CASH-FLOW ALGORITHMIC ENGINE (IN INR ₹, TRIP-SCOPED)
 # ------------------------------------------------------------------------------
-def get_active_trip(request: Request, db: Session, trip_id: Optional[int] = None) -> Optional[TripModel]:
-    """Resolve the active trip from parameter, query string, cookie, or most recent."""
-    if trip_id:
-        trip = db.query(TripModel).filter(TripModel.id == trip_id).first()
-        if trip:
-            return trip
+def get_user_trips(db: Session, user_id: int) -> List[TripModel]:
+    """Return all trips where user is host or member."""
+    return (
+        db.query(TripModel)
+        .join(TripMemberModel, TripMemberModel.trip_id == TripModel.id)
+        .filter(TripMemberModel.user_id == user_id)
+        .order_by(TripModel.id.desc())
+        .all()
+    )
 
-    # Query param in request
+def get_active_trip(request: Request, db: Session, current_user: Optional[UserModel], trip_id: Optional[int] = None) -> Optional[TripModel]:
+    """Resolve active trip for current user, verifying access membership."""
+    if not current_user:
+        return None
+
+    user_trips = get_user_trips(db, current_user.id)
+    user_trip_ids = {t.id for t in user_trips}
+
+    # 1. Explicit argument
+    if trip_id and trip_id in user_trip_ids:
+        return next(t for t in user_trips if t.id == trip_id)
+
+    # 2. Query param
     param_id = request.query_params.get("trip_id")
-    if param_id and param_id.isdigit():
-        trip = db.query(TripModel).filter(TripModel.id == int(param_id)).first()
-        if trip:
-            return trip
+    if param_id and param_id.isdigit() and int(param_id) in user_trip_ids:
+        return next(t for t in user_trips if t.id == int(param_id))
 
-    # Cookie
+    # 3. Cookie
     cookie_id = request.cookies.get("tripsplit_active_trip")
-    if cookie_id and cookie_id.isdigit():
-        trip = db.query(TripModel).filter(TripModel.id == int(cookie_id)).first()
-        if trip:
-            return trip
+    if cookie_id and cookie_id.isdigit() and int(cookie_id) in user_trip_ids:
+        return next(t for t in user_trips if t.id == int(cookie_id))
 
-    # Most recent trip
-    return db.query(TripModel).order_by(TripModel.id.desc()).first()
+    # 4. Default to first trip
+    return user_trips[0] if user_trips else None
 
 
-def compute_financials(db: Session, active_trip: Optional[TripModel] = None, active_tab: str = "group") -> Dict[str, Any]:
-    all_trips = db.query(TripModel).order_by(TripModel.id.desc()).all()
+def compute_financials(db: Session, active_trip: Optional[TripModel] = None, active_tab: str = "group", user_trips: Optional[List[TripModel]] = None) -> Dict[str, Any]:
+    all_trips = user_trips if user_trips is not None else []
 
     if not active_trip:
         return {
@@ -374,7 +630,8 @@ def compute_financials(db: Session, active_trip: Optional[TripModel] = None, act
             "settled_count": 0,
             "settled_amount": 0.0,
             "category_spend": {},
-            "categories": CATEGORIES,
+            "categories": DEFAULT_CATEGORIES,
+            "default_categories": DEFAULT_CATEGORIES,
             "category_colors": CATEGORY_COLORS,
             "currencies": CURRENCIES,
             "currency_symbols": CURRENCY_SYMBOLS,
@@ -385,6 +642,7 @@ def compute_financials(db: Session, active_trip: Optional[TripModel] = None, act
             "active_view": active_tab,
         }
 
+    # Participants list (order by id)
     participants = [p.name for p in db.query(ParticipantModel).filter(ParticipantModel.trip_id == active_trip.id).order_by(ParticipantModel.id).all()]
     expenses_models = db.query(ExpenseModel).filter(ExpenseModel.trip_id == active_trip.id).order_by(ExpenseModel.date.desc(), ExpenseModel.id.desc()).all()
 
@@ -417,6 +675,7 @@ def compute_financials(db: Session, active_trip: Optional[TripModel] = None, act
             "original_symbol": em.original_symbol,
             "amount": em.amount,
             "category": em.category,
+            "color": get_category_color(em.category),
             "description": em.description,
             "splitters": splitters,
             "split_count": split_count,
@@ -440,7 +699,6 @@ def compute_financials(db: Session, active_trip: Optional[TripModel] = None, act
     if raw_balances:
         net_sum = round(sum(b["net"] for b in raw_balances), 2)
         if abs(net_sum) >= 0.01:
-            # Rebalance the residual penny onto the participant with the largest net magnitude
             max_bal = max(raw_balances, key=lambda b: abs(b["net"]))
             max_bal["net"] = round(max_bal["net"] - net_sum, 2)
 
@@ -460,7 +718,6 @@ def compute_financials(db: Session, active_trip: Optional[TripModel] = None, act
     creditors = {b["participant"]: b["net"] for b in balances if b["net"] > epsilon}
     debtors = {b["participant"]: -b["net"] for b in balances if b["net"] < -epsilon}
 
-    # Ensure total creditor balance matches total debtor balance strictly
     sum_c = round(sum(creditors.values()), 2)
     sum_d = round(sum(debtors.values()), 2)
     if abs(sum_c - sum_d) >= epsilon:
@@ -472,53 +729,62 @@ def compute_financials(db: Session, active_trip: Optional[TripModel] = None, act
             max_k = max(creditors.keys(), key=lambda k: creditors[k])
             creditors[max_k] = round(creditors[max_k] - residual, 2)
 
-    cred_items = sorted(creditors.items(), key=lambda kv: -kv[1])
-    debt_items = sorted(debtors.items(), key=lambda kv: -kv[1])
+    cred_list = [[k, v] for k, v in creditors.items() if v > epsilon]
+    deb_list = [[k, v] for k, v in debtors.items() if v > epsilon]
 
     transactions = []
-    ci, di = 0, 0
-    while ci < len(cred_items) and di < len(debt_items):
-        c_name, c_amt = cred_items[ci]
-        d_name, d_amt = debt_items[di]
-        settle = round(min(c_amt, d_amt), 2)
+    while cred_list and deb_list:
+        cred_list.sort(key=lambda x: x[1], reverse=True)
+        deb_list.sort(key=lambda x: x[1], reverse=True)
 
-        if settle > epsilon:
+        c = cred_list[0]
+        d = deb_list[0]
+        transfer_amt = min(c[1], d[1])
+        transfer_amt_rounded = round(transfer_amt, 2)
+
+        if transfer_amt_rounded > 0:
             transactions.append({
-                "from": d_name,
-                "to": c_name,
-                "amount": settle
+                "from": d[0],
+                "to": c[0],
+                "amount": transfer_amt_rounded,
             })
 
-        c_amt = round(c_amt - settle, 2)
-        d_amt = round(d_amt - settle, 2)
-        cred_items[ci] = (c_name, c_amt)
-        debt_items[di] = (d_name, d_amt)
+        c[1] = round(c[1] - transfer_amt, 2)
+        d[1] = round(d[1] - transfer_amt, 2)
 
-        if c_amt <= epsilon:
-            ci += 1
-        if d_amt <= epsilon:
-            di += 1
+        if c[1] < epsilon:
+            cred_list.pop(0)
+        if d[1] < epsilon:
+            deb_list.pop(0)
 
-    # Attach interactive settlement status from database
-    settlement_records = {
-        (s.from_name, s.to_name): s
-        for s in db.query(SettlementModel).filter(SettlementModel.trip_id == active_trip.id).all()
-    }
+    # Attach database settlement checkmark statuses
+    settled_records = db.query(SettlementStatusModel).filter(
+        SettlementStatusModel.trip_id == active_trip.id,
+        SettlementStatusModel.is_settled == True
+    ).all()
+    settled_set = {(s.from_user, s.to_user): s.settled_at for s in settled_records}
+
+    settled_count = 0
+    settled_amount = 0.0
     for t in transactions:
-        rec = settlement_records.get((t["from"], t["to"]))
-        t["is_settled"] = bool(rec and rec.is_settled)
-        t["settled_at"] = rec.settled_at.strftime("%b %d, %H:%M") if (rec and rec.settled_at) else None
+        key = (t["from"], t["to"])
+        if key in settled_set:
+            t["is_settled"] = True
+            t["settled_at"] = settled_set[key].strftime("%b %d, %H:%M") if settled_set[key] else "Paid"
+            settled_count += 1
+            settled_amount += t["amount"]
+        else:
+            t["is_settled"] = False
+            t["settled_at"] = None
 
-    settled_count = sum(1 for t in transactions if t.get("is_settled"))
-    settled_amount = round(sum(t["amount"] for t in transactions if t.get("is_settled")), 2)
-
-    # Metrics calculation & Savings percentage
+    # Transactions saved metric
     naive_edges = len(debtors) * len(creditors)
+    if naive_edges < len(transactions):
+        naive_edges = len(transactions)
     saved_transactions = max(0, naive_edges - len(transactions))
-    saved_percent = round((saved_transactions / naive_edges) * 100, 1) if naive_edges > 0 else 0.0
-    avg_spend = round(total_spend / len(participants), 2) if participants else 0.0
+    saved_percent = round((saved_transactions / naive_edges * 100), 1) if naive_edges > 0 else 0.0
 
-    # Adjacency matrix for payment distribution
+    # Peer-to-peer matrix
     matrix = {p: {other: 0.0 for other in participants} for p in participants}
     for t in transactions:
         if t["from"] in matrix and t["to"] in matrix[t["from"]]:
@@ -527,50 +793,60 @@ def compute_financials(db: Session, active_trip: Optional[TripModel] = None, act
     # Individual drill-down profiles
     individual_profiles = {}
     for p in participants:
-        p_paid = round(paid.get(p, 0.0), 2)
-        p_owed = round(owed.get(p, 0.0), 2)
-        p_net = round(p_paid - p_owed, 2)
-        owes_to = [t for t in transactions if t["from"] == p]
-        receives_from = [t for t in transactions if t["to"] == p]
-        paid_expenses = [e for e in expenses if e["payer"] == p]
-        shared_expenses = [e for e in expenses if p in e["splitters"]]
+        p_expenses = [e for e in expenses if e["payer"] == p]
+        p_shared = [e for e in expenses if p in e["splitters"]]
+        p_to_send = [t for t in transactions if t["from"] == p]
+        p_to_receive = [t for t in transactions if t["to"] == p]
+        p_bal = next((b for b in balances if b["participant"] == p), {"paid": 0.0, "owed": 0.0, "net": 0.0, "status": "settled"})
 
         individual_profiles[p] = {
             "name": p,
-            "paid": p_paid,
-            "owed": p_owed,
-            "net": p_net,
-            "owes_to": owes_to,
-            "receives_from": receives_from,
-            "paid_count": len(paid_expenses),
-            "shared_count": len(shared_expenses),
-            "status": "creditor" if p_net > 0.01 else ("debtor" if p_net < -0.01 else "settled")
+            "paid": p_bal["paid"],
+            "owed": p_bal["owed"],
+            "net": p_bal["net"],
+            "status": p_bal["status"],
+            "expenses_paid": p_expenses,
+            "expenses_involved": p_shared,
+            "transfers_to_send": p_to_send,
+            "transfers_to_receive": p_to_receive,
         }
 
-    # Gamified badges & spending health
+    # Dynamic categories (default + custom logged)
+    seen_cats = set(DEFAULT_CATEGORIES)
+    dynamic_categories = list(DEFAULT_CATEGORIES)
+    for em in expenses_models:
+        if em.category not in seen_cats:
+            seen_cats.add(em.category)
+            dynamic_categories.append(em.category)
+
+    category_colors = {cat: get_category_color(cat) for cat in dynamic_categories}
+
+    total_travelers = len(participants)
+    avg_spend = round(total_spend / total_travelers, 2) if total_travelers > 0 else 0.0
+    health = compute_spending_health(total_spend, total_travelers, len(expenses))
     achievements = compute_achievements(participants, expenses_models, balances)
-    health = compute_spending_health(total_spend, len(participants), len(expenses))
 
     return {
         "all_trips": all_trips,
         "active_trip": active_trip,
         "participants": participants,
         "expenses": expenses,
-        "balances": sorted(balances, key=lambda x: x["net"], reverse=True),
+        "balances": balances,
         "transactions": transactions,
-        "settled_count": settled_count,
-        "settled_amount": settled_amount,
         "matrix": matrix,
         "total_spend": round(total_spend, 2),
         "avg_spend": avg_spend,
         "total_expenses": len(expenses),
-        "total_travelers": len(participants),
+        "total_travelers": total_travelers,
         "naive_edges": naive_edges,
         "saved_transactions": saved_transactions,
         "saved_percent": saved_percent,
+        "settled_count": settled_count,
+        "settled_amount": round(settled_amount, 2),
         "category_spend": dict(category_spend),
-        "categories": CATEGORIES,
-        "category_colors": CATEGORY_COLORS,
+        "categories": dynamic_categories,
+        "default_categories": DEFAULT_CATEGORIES,
+        "category_colors": category_colors,
         "currencies": CURRENCIES,
         "currency_symbols": CURRENCY_SYMBOLS,
         "currency_rates": CURRENCY_RATES_TO_INR,
@@ -581,409 +857,713 @@ def compute_financials(db: Session, active_trip: Optional[TripModel] = None, act
     }
 
 
-# ------------------------------------------------------------------------------
-# GOOGLE GEMINI RECEIPT PARSER (with INR default)
-# ------------------------------------------------------------------------------
-RECEIPT_PROMPT = """You are an ultra-precise FinTech receipt parser.
-Look at the attached receipt image and extract structured data as STRICT JSON.
-DO NOT include markdown fences, extra commentary, or conversational remarks.
-Return ONLY valid JSON matching this schema:
+def build_context(
+    request: Request,
+    db: Session,
+    active_trip: Optional[TripModel] = None,
+    active_tab: str = "group",
+    current_user: Optional[UserModel] = None
+) -> Dict[str, Any]:
+    """Construct full rendering context with multi-tenant multiplayer state."""
+    user_trips = get_user_trips(db, current_user.id) if current_user else []
+    fin = compute_financials(db, active_trip, active_tab=active_tab, user_trips=user_trips)
 
-{
-  "merchant": "<string, vendor/business name>",
-  "total_amount": <number, final total paid without currency symbol>,
-  "currency": "<one of: INR, USD, EUR, GBP>",
-  "category": "<one of: Food, Lodging, Transit, Activities, Misc>",
-  "date": "<YYYY-MM-DD, transaction date or today's date>",
-  "description": "<short 3-8 word human summary of items>"
-}
-"""
+    trip_members = []
+    is_host = False
+    join_code = ""
+    invite_url = ""
 
-def parse_receipt_ai(image_bytes: bytes, mime_type: str, api_key: str) -> dict:
-    if not GENAI_SDK_AVAILABLE:
-        raise RuntimeError("google-generativeai SDK is not available.")
-    if not api_key:
-        raise RuntimeError("No Gemini API key provided. Set GOOGLE_API_KEY or input in sidebar.")
+    if active_trip:
+        # Strictly ensure join_code is never None or empty
+        if not active_trip.join_code or not str(active_trip.join_code).strip():
+            active_trip.join_code = generate_join_code(db)
+            db.commit()
+            db.refresh(active_trip)
 
-    models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash"]
-    last_error = None
+        trip_members = (
+            db.query(TripMemberModel)
+            .filter(TripMemberModel.trip_id == active_trip.id)
+            .join(UserModel, UserModel.id == TripMemberModel.user_id)
+            .order_by(TripMemberModel.id)
+            .all()
+        )
+        is_host = (current_user is not None and active_trip.host_user_id == current_user.id)
+        join_code = active_trip.join_code
+        host = request.headers.get("host", "localhost:8000")
+        proto = "https" if request.headers.get("x-forwarded-proto") == "https" else "http"
+        invite_url = f"{proto}://{host}/join/{join_code}"
 
-    if LEGACY_GENAI_AVAILABLE:
-        genai_legacy.configure(api_key=api_key)
-        pil_img = Image.open(io.BytesIO(image_bytes))
-        for model in models_to_try:
-            try:
-                m = genai_legacy.GenerativeModel(
-                    model_name=model,
-                    generation_config={"response_mime_type": "application/json", "temperature": 0.1}
-                )
-                resp = m.generate_content([RECEIPT_PROMPT, pil_img])
-                cleaned = resp.text.strip().replace("```json", "").replace("```", "").strip()
-                return json.loads(cleaned)
-            except Exception as err:
-                last_error = err
-                continue
+    has_api_key = bool(get_effective_api_key())
 
-    if NEW_GENAI_AVAILABLE:
-        client = new_genai.Client(api_key=api_key)
-        part = genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-        for model in models_to_try:
-            try:
-                resp = client.models.generate_content(
-                    model=model,
-                    contents=[RECEIPT_PROMPT, part],
-                    config=genai_types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
-                )
-                cleaned = resp.text.strip().replace("```json", "").replace("```", "").strip()
-                return json.loads(cleaned)
-            except Exception as err:
-                last_error = err
-                continue
-
-    raise RuntimeError(f"Gemini receipt parsing failed across fallback models. Last error: {last_error}")
-
-
-# ------------------------------------------------------------------------------
-# FASTAPI ENDPOINTS WITH MULTI-TRIP & SETTLEMENT CHECKMARKS
-# ------------------------------------------------------------------------------
-def build_context(request: Request, db: Session, active_trip: Optional[TripModel] = None) -> Dict[str, Any]:
-    ctx = compute_financials(db, active_trip)
-    ctx.update({
+    ctx = {
         "request": request,
-        "has_api_key": bool(get_effective_api_key()),
-        "today_date": dt.date.today().strftime("%Y-%m-%d"),
-    })
+        "current_user": current_user,
+        "is_host": is_host,
+        "trip_members": trip_members,
+        "join_code": join_code,
+        "invite_url": invite_url,
+        "has_api_key": has_api_key,
+        "today_date": dt.date.today().isoformat(),
+        **fin
+    }
     return ctx
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request, trip_id: Optional[int] = None, db: Session = Depends(get_db)):
-    active_trip = get_active_trip(request, db, trip_id=trip_id)
-    ctx = build_context(request, db, active_trip)
-    resp = templates.TemplateResponse(request=request, name="index.html", context=ctx)
-    if active_trip:
-        resp.set_cookie("tripsplit_active_trip", str(active_trip.id), max_age=30*86400, httponly=True, samesite="lax")
+# ------------------------------------------------------------------------------
+# FASTAPI APPLICATION SETUP & TEMPLATES
+# ------------------------------------------------------------------------------
+app = FastAPI(
+    title="TripSplit AI",
+    description="Collaborative Group Expense Tracker, Min-Cash-Flow Debt Simplification, & Receipt Parser",
+    version="3.0.0",
+    lifespan=lifespan
+)
+
+templates = Jinja2Templates(directory="templates")
+
+# Custom HTTP exception handling for clean 303 redirects and HTMX client-side routing
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    if exc.status_code == 303 and "Location" in exc.headers:
+        return RedirectResponse(url=exc.headers["Location"], status_code=303)
+    if exc.status_code == 401 and "HX-Redirect" in exc.headers:
+        return Response(status_code=200, headers={"HX-Redirect": exc.headers["HX-Redirect"]})
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
+
+
+# ------------------------------------------------------------------------------
+# AUTHENTICATION ENDPOINTS (LOGIN, REGISTER, LOGOUT)
+# ------------------------------------------------------------------------------
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(
+    request: Request,
+    join_code: Optional[str] = None,
+    next: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    user = get_current_user_optional(request, db)
+    target_code = join_code or request.cookies.get("pending_join_code")
+    if user:
+        if target_code:
+            return RedirectResponse(url=f"/join/{target_code.upper()}", status_code=303)
+        return RedirectResponse(url=next or "/", status_code=303)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={"request": request, "join_code": target_code, "next_url": next, "error": None}
+    )
+
+
+@app.post("/login", response_class=HTMLResponse)
+async def login_action(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    join_code: Optional[str] = Form(None),
+    next_url: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
+):
+    clean_email = email.strip().lower()
+    user = db.query(UserModel).filter(UserModel.email == clean_email).first()
+    target_code = join_code or request.cookies.get("pending_join_code")
+
+    if not user or not verify_password(password, user.hashed_password):
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={
+                "request": request,
+                "email": clean_email,
+                "join_code": target_code,
+                "next_url": next_url,
+                "error": "Invalid email address or password. Please try again."
+            },
+            status_code=400
+        )
+
+    token = create_session_token(user.id)
+    if target_code:
+        resp = RedirectResponse(url=f"/join/{target_code.upper()}", status_code=303)
+    elif next_url and next_url.startswith("/"):
+        resp = RedirectResponse(url=next_url, status_code=303)
+    else:
+        resp = RedirectResponse(url="/", status_code=303)
+
+    resp.set_cookie("tripsplit_session", token, max_age=30*86400, httponly=True, samesite="lax")
+    return resp
+
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_page(
+    request: Request,
+    join_code: Optional[str] = None,
+    next: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    user = get_current_user_optional(request, db)
+    target_code = join_code or request.cookies.get("pending_join_code")
+    if user:
+        if target_code:
+            return RedirectResponse(url=f"/join/{target_code.upper()}", status_code=303)
+        return RedirectResponse(url=next or "/", status_code=303)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="register.html",
+        context={"request": request, "join_code": target_code, "next_url": next, "error": None}
+    )
+
+
+@app.post("/register", response_class=HTMLResponse)
+async def register_action(
+    request: Request,
+    full_name: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    confirm_password: str = Form(...),
+    join_code: Optional[str] = Form(None),
+    next_url: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
+):
+    clean_name = full_name.strip()
+    clean_email = email.strip().lower()
+    target_code = join_code or request.cookies.get("pending_join_code")
+
+    if not clean_name:
+        return templates.TemplateResponse(
+            request=request, name="register.html",
+            context={"request": request, "full_name": clean_name, "email": clean_email, "join_code": target_code, "next_url": next_url, "error": "Full Name is required."},
+            status_code=400
+        )
+    if len(password) < 6:
+        return templates.TemplateResponse(
+            request=request, name="register.html",
+            context={"request": request, "full_name": clean_name, "email": clean_email, "join_code": target_code, "next_url": next_url, "error": "Password must be at least 6 characters long."},
+            status_code=400
+        )
+    if password != confirm_password:
+        return templates.TemplateResponse(
+            request=request, name="register.html",
+            context={"request": request, "full_name": clean_name, "email": clean_email, "join_code": target_code, "next_url": next_url, "error": "Passwords do not match."},
+            status_code=400
+        )
+
+    existing = db.query(UserModel).filter(UserModel.email == clean_email).first()
+    if existing:
+        return templates.TemplateResponse(
+            request=request, name="register.html",
+            context={"request": request, "full_name": clean_name, "email": clean_email, "join_code": target_code, "next_url": next_url, "error": "An account with this email already exists. Please sign in."},
+            status_code=400
+        )
+
+    hashed = hash_password(password)
+    new_user = UserModel(
+        email=clean_email,
+        full_name=clean_name,
+        hashed_password=hashed
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    token = create_session_token(new_user.id)
+    if target_code:
+        resp = RedirectResponse(url=f"/join/{target_code.upper()}", status_code=303)
+    elif next_url and next_url.startswith("/"):
+        resp = RedirectResponse(url=next_url, status_code=303)
+    else:
+        resp = RedirectResponse(url="/", status_code=303)
+
+    resp.set_cookie("tripsplit_session", token, max_age=30*86400, httponly=True, samesite="lax")
+    return resp
+
+
+@app.get("/logout")
+@app.post("/logout")
+async def logout_endpoint():
+    resp = RedirectResponse(url="/login", status_code=303)
+    resp.delete_cookie("tripsplit_session")
+    resp.delete_cookie("tripsplit_active_trip")
+    resp.delete_cookie("pending_join_code")
     return resp
 
 
 # ------------------------------------------------------------------------------
-# MULTI-TRIP MANAGEMENT ENDPOINTS
+# TRIP COLLABORATION WORKSPACE INVITE JOIN ENDPOINT
+# ------------------------------------------------------------------------------
+@app.get("/join/{join_code}")
+async def join_trip_endpoint(
+    request: Request,
+    join_code: str,
+    db: Session = Depends(get_db)
+):
+    clean_code = join_code.strip().upper()
+    trip = db.query(TripModel).filter(TripModel.join_code == clean_code).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail=f"No collaborative trip workspace found with access key '{clean_code}'.")
+
+    current_user = get_current_user_optional(request, db)
+    if not current_user:
+        resp = RedirectResponse(url=f"/register?join_code={clean_code}", status_code=303)
+        resp.set_cookie("pending_join_code", clean_code, max_age=3600, httponly=True)
+        return resp
+
+    # Add as TripMember if not already
+    member = db.query(TripMemberModel).filter(
+        TripMemberModel.trip_id == trip.id,
+        TripMemberModel.user_id == current_user.id
+    ).first()
+    if not member:
+        new_member = TripMemberModel(
+            trip_id=trip.id,
+            user_id=current_user.id,
+            role="member"
+        )
+        db.add(new_member)
+        db.commit()
+
+    # Ensure user is recorded in ParticipantModel
+    p = db.query(ParticipantModel).filter(
+        ParticipantModel.trip_id == trip.id,
+        ParticipantModel.name == current_user.full_name
+    ).first()
+    if not p:
+        db.add(ParticipantModel(trip_id=trip.id, name=current_user.full_name))
+        db.commit()
+
+    resp = RedirectResponse(url=f"/?trip_id={trip.id}", status_code=303)
+    resp.set_cookie("tripsplit_active_trip", str(trip.id), max_age=30*86400)
+    resp.delete_cookie("pending_join_code")
+    return resp
+
+
+# ------------------------------------------------------------------------------
+# CORE WEB UI ROUTES
+# ------------------------------------------------------------------------------
+@app.get("/", response_class=HTMLResponse)
+async def index_endpoint(request: Request, db: Session = Depends(get_db)):
+    current_user = get_current_user_optional(request, db)
+    if not current_user:
+        pending_code = request.query_params.get("join_code") or request.cookies.get("pending_join_code")
+        if pending_code:
+            return RedirectResponse(url=f"/register?join_code={pending_code.upper()}", status_code=303)
+        return RedirectResponse(url="/login", status_code=303)
+
+    active_trip = get_active_trip(request, db, current_user)
+    ctx = build_context(request, db, active_trip, current_user=current_user)
+    resp = templates.TemplateResponse(request=request, name="index.html", context=ctx)
+    if active_trip:
+        resp.set_cookie("tripsplit_active_trip", str(active_trip.id), max_age=30*86400)
+    return resp
+
+
+@app.get("/api/dashboard", response_class=HTMLResponse)
+async def dashboard_endpoint(
+    request: Request,
+    tab: str = "group",
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    active_trip = get_active_trip(request, db, current_user)
+    ctx = build_context(request, db, active_trip, active_tab=tab, current_user=current_user)
+    return templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
+
+
+# ------------------------------------------------------------------------------
+# TRIP MANAGEMENT (MULTI-TRIP SCOPED TO MEMBERS)
 # ------------------------------------------------------------------------------
 @app.post("/api/trips", response_class=HTMLResponse)
-async def create_trip_endpoint(request: Request, name: str = Form(...), db: Session = Depends(get_db)):
-    clean_name = name.strip() or "New Trip"
-    new_trip = TripModel(name=clean_name, currency="INR")
-    db.add(new_trip)
-    db.commit()
-    db.refresh(new_trip)
+async def create_trip_endpoint(
+    request: Request,
+    name: str = Form(...),
+    currency: str = Form("INR"),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    clean_name = name.strip()
+    if not clean_name:
+        clean_name = "Untitled Trip"
 
-    ctx = build_context(request, db, new_trip)
+    code = generate_join_code(db)
+    trip = TripModel(
+        name=clean_name,
+        host_user_id=current_user.id,
+        join_code=code,
+        base_currency=currency.upper() if currency.upper() in CURRENCIES else "INR"
+    )
+    db.add(trip)
+    db.commit()
+    db.refresh(trip)
+
+    # Host is enrolled as Host
+    member = TripMemberModel(
+        trip_id=trip.id,
+        user_id=current_user.id,
+        role="host"
+    )
+    db.add(member)
+
+    # Host is added as initial participant
+    participant = ParticipantModel(
+        trip_id=trip.id,
+        name=current_user.full_name
+    )
+    db.add(participant)
+    db.commit()
+
+    ctx = build_context(request, db, trip, current_user=current_user)
     resp = templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
-    resp.set_cookie("tripsplit_active_trip", str(new_trip.id), max_age=30*86400, httponly=True, samesite="lax")
+    resp.set_cookie("tripsplit_active_trip", str(trip.id), max_age=30*86400)
     return resp
 
 
 @app.post("/api/trips/select", response_class=HTMLResponse)
-async def select_trip_endpoint(request: Request, trip_id: int = Form(...), db: Session = Depends(get_db)):
-    active_trip = get_active_trip(request, db, trip_id=trip_id)
-    ctx = build_context(request, db, active_trip)
+async def select_trip_endpoint(
+    request: Request,
+    trip_id: int = Form(...),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    user_trips = get_user_trips(db, current_user.id)
+    trip = next((t for t in user_trips if t.id == trip_id), None)
+    if not trip:
+        raise HTTPException(status_code=403, detail="You do not have access to this trip")
+
+    ctx = build_context(request, db, trip, current_user=current_user)
     resp = templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
-    if active_trip:
-        resp.set_cookie("tripsplit_active_trip", str(active_trip.id), max_age=30*86400, httponly=True, samesite="lax")
+    resp.set_cookie("tripsplit_active_trip", str(trip.id), max_age=30*86400)
     return resp
 
 
 @app.post("/api/trips/{trip_id}/delete", response_class=HTMLResponse)
-async def delete_trip_endpoint(request: Request, trip_id: int, db: Session = Depends(get_db)):
-    target_trip = db.query(TripModel).filter(TripModel.id == trip_id).first()
-    if target_trip:
-        db.delete(target_trip)
-        db.commit()
+async def delete_trip_endpoint(
+    request: Request,
+    trip_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    trip = db.query(TripModel).filter(TripModel.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
 
-    active_trip = db.query(TripModel).order_by(TripModel.id.desc()).first()
-    ctx = build_context(request, db, active_trip)
+    # STRICT PERMISSION: Only the Host can delete the trip
+    if trip.host_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the Trip Host (👑) can delete this trip.")
+
+    db.delete(trip)
+    db.commit()
+
+    remaining_trips = get_user_trips(db, current_user.id)
+    next_active = remaining_trips[0] if remaining_trips else None
+
+    ctx = build_context(request, db, next_active, current_user=current_user)
     resp = templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
-    if active_trip:
-        resp.set_cookie("tripsplit_active_trip", str(active_trip.id), max_age=30*86400, httponly=True, samesite="lax")
+    if next_active:
+        resp.set_cookie("tripsplit_active_trip", str(next_active.id), max_age=30*86400)
     else:
         resp.delete_cookie("tripsplit_active_trip")
     return resp
 
 
-# ------------------------------------------------------------------------------
-# SETTLEMENT CHECKMARK TOGGLE ENDPOINT
-# ------------------------------------------------------------------------------
-@app.post("/api/settlements/toggle", response_class=HTMLResponse)
-async def toggle_settlement_endpoint(
-    request: Request,
-    from_name: str = Form(...),
-    to_name: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    active_trip = get_active_trip(request, db)
-    if active_trip:
-        rec = db.query(SettlementModel).filter(
-            SettlementModel.trip_id == active_trip.id,
-            SettlementModel.from_name == from_name,
-            SettlementModel.to_name == to_name
-        ).first()
-
-        if not rec:
-            rec = SettlementModel(
-                trip_id=active_trip.id,
-                from_name=from_name,
-                to_name=to_name,
-                is_settled=True,
-                settled_at=dt.datetime.utcnow()
-            )
-            db.add(rec)
-        else:
-            rec.is_settled = not rec.is_settled
-            rec.settled_at = dt.datetime.utcnow() if rec.is_settled else None
-        db.commit()
-
-    ctx = build_context(request, db, active_trip)
-    return templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
-
-
-# ------------------------------------------------------------------------------
-# RESET STATE ENDPOINT (PRISTINE ZERO-STATE)
-# ------------------------------------------------------------------------------
 @app.post("/api/reset", response_class=HTMLResponse)
-async def reset_endpoint(request: Request, db: Session = Depends(get_db)):
-    """Wipes all data and returns to pristine zero-state (0 trips, 0 travelers, 0 expenses)."""
-    db.query(ExpenseModel).delete()
-    db.query(ParticipantModel).delete()
-    db.query(SettlementModel).delete()
-    db.query(TripModel).delete()
+async def reset_endpoint(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Wipes active trip data or all trips owned by user, returning to zero-state."""
+    user_trips = db.query(TripModel).filter(TripModel.host_user_id == current_user.id).all()
+    for t in user_trips:
+        db.delete(t)
     db.commit()
 
-    ctx = build_context(request, db, None)
+    ctx = build_context(request, db, None, current_user=current_user)
     resp = templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
     resp.delete_cookie("tripsplit_active_trip")
     return resp
 
 
 @app.post("/api/key", response_class=HTMLResponse)
-async def set_api_key(request: Request, api_key: str = Form(""), db: Session = Depends(get_db)):
+async def set_api_key(
+    request: Request,
+    api_key: str = Form(""),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
     global GLOBAL_API_KEY_OVERRIDE
     GLOBAL_API_KEY_OVERRIDE = api_key.strip()
-    active_trip = get_active_trip(request, db)
-    ctx = build_context(request, db, active_trip)
+    active_trip = get_active_trip(request, db, current_user)
+    ctx = build_context(request, db, active_trip, current_user=current_user)
     return templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
 
 
 # ------------------------------------------------------------------------------
-# PARTICIPANTS & EXPENSES ENDPOINTS (TRIP-SCOPED)
+# PARTICIPANTS & EXPENSES ENDPOINTS (COLLABORATIVE)
 # ------------------------------------------------------------------------------
 @app.post("/api/participants", response_class=HTMLResponse)
-async def add_participant_endpoint(request: Request, name: str = Form(...), db: Session = Depends(get_db)):
-    active_trip = get_active_trip(request, db)
+async def add_participant_endpoint(
+    request: Request,
+    name: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    active_trip = get_active_trip(request, db, current_user)
     if not active_trip:
-        # Create a default trip if none exists
-        active_trip = TripModel(name="My Trip", currency="INR")
-        db.add(active_trip)
-        db.commit()
-        db.refresh(active_trip)
+        raise HTTPException(status_code=400, detail="No active trip selected")
 
-    cleaned = (name or "").strip()
-    if cleaned:
+    clean_name = name.strip()
+    if clean_name:
         existing = db.query(ParticipantModel).filter(
             ParticipantModel.trip_id == active_trip.id,
-            ParticipantModel.name == cleaned
+            ParticipantModel.name == clean_name
         ).first()
         if not existing:
-            db.add(ParticipantModel(trip_id=active_trip.id, name=cleaned))
+            new_p = ParticipantModel(trip_id=active_trip.id, name=clean_name)
+            db.add(new_p)
             db.commit()
 
-    ctx = build_context(request, db, active_trip)
-    resp = templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
-    resp.set_cookie("tripsplit_active_trip", str(active_trip.id), max_age=30*86400, httponly=True, samesite="lax")
-    return resp
+    ctx = build_context(request, db, active_trip, current_user=current_user)
+    return templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
 
 
 @app.post("/api/participants/{name}/delete", response_class=HTMLResponse)
-async def delete_participant_endpoint(request: Request, name: str, db: Session = Depends(get_db)):
-    active_trip = get_active_trip(request, db)
-    if active_trip:
-        target = db.query(ParticipantModel).filter(
-            ParticipantModel.trip_id == active_trip.id,
-            ParticipantModel.name == name
-        ).first()
-        if target:
-            db.delete(target)
-            # Clean up splitters in expenses for this trip
-            all_expenses = db.query(ExpenseModel).filter(ExpenseModel.trip_id == active_trip.id).all()
-            for exp in all_expenses:
-                splitters = exp.splitters_list
-                if name in splitters:
-                    splitters = [s for s in splitters if s != name]
-                    exp.splitters = json.dumps(splitters)
-                if exp.payer == name:
-                    exp.payer = None
-            db.commit()
+async def delete_participant_endpoint(
+    request: Request,
+    name: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    active_trip = get_active_trip(request, db, current_user)
+    if not active_trip:
+        raise HTTPException(status_code=400, detail="No active trip selected")
 
-    ctx = build_context(request, db, active_trip)
+    p = db.query(ParticipantModel).filter(
+        ParticipantModel.trip_id == active_trip.id,
+        ParticipantModel.name == name
+    ).first()
+    if p:
+        db.delete(p)
+        db.commit()
+
+    ctx = build_context(request, db, active_trip, current_user=current_user)
     return templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
 
 
 @app.post("/api/expenses", response_class=HTMLResponse)
 async def add_expense_endpoint(
     request: Request,
-    payer: str = Form(...),
+    description: str = Form(...),
     amount: float = Form(...),
     currency: str = Form("INR"),
-    category: str = Form("Misc"),
+    category: str = Form("Miscellaneous"),
+    custom_category: Optional[str] = Form(None),
     date: str = Form(...),
-    description: str = Form(""),
-    splitters: Optional[List[str]] = Form(None),
-    db: Session = Depends(get_db)
+    payer: str = Form(...),
+    splitters: List[str] = Form(...),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
-    active_trip = get_active_trip(request, db)
+    active_trip = get_active_trip(request, db, current_user)
     if not active_trip:
-        active_trip = TripModel(name="My Trip", currency="INR")
-        db.add(active_trip)
-        db.commit()
-        db.refresh(active_trip)
+        raise HTTPException(status_code=400, detail="No active trip selected")
 
-    all_participants = [p.name for p in db.query(ParticipantModel).filter(ParticipantModel.trip_id == active_trip.id).all()]
-    selected_splitters = splitters or all_participants[:]
-    clean_splitters = [s for s in selected_splitters if s in all_participants] or all_participants[:]
+    clean_curr = currency.upper() if currency.upper() in CURRENCIES else "INR"
+    clean_amt = max(float(amount), 0.01)
+    normalized_inr = normalize_to_inr(clean_amt, clean_curr)
+    resolved_category = normalize_category_name(category, custom_category)
 
-    if amount > 0:
-        clean_amount = min(float(amount), 100_000_000.0)
-        clean_currency = currency.upper() if currency.upper() in CURRENCIES else "INR"
-        normalized_inr = normalize_to_inr(clean_amount, clean_currency)
-        new_exp = ExpenseModel(
-            trip_id=active_trip.id,
-            date=date,
-            payer=payer,
-            original_amount=round(float(clean_amount), 2),
-            currency=clean_currency,
-            amount=normalized_inr,
-            category=category if category in CATEGORIES else "Misc",
-            description=description.strip() or "Expense",
-            splitters=json.dumps(clean_splitters)
-        )
-        db.add(new_exp)
-        db.commit()
+    expense = ExpenseModel(
+        trip_id=active_trip.id,
+        created_by_user_id=current_user.id,
+        payer_name=payer.strip(),
+        amount=normalized_inr,
+        original_amount=clean_amt,
+        currency=clean_curr,
+        category=resolved_category,
+        description=description.strip(),
+        beneficiaries_json=json.dumps(splitters),
+        date=date.strip(),
+    )
+    db.add(expense)
+    db.commit()
 
-    ctx = build_context(request, db, active_trip)
-    resp = templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
-    resp.set_cookie("tripsplit_active_trip", str(active_trip.id), max_age=30*86400, httponly=True, samesite="lax")
-    return resp
-
-
-@app.post("/api/expenses/{expense_id}/delete", response_class=HTMLResponse)
-async def delete_expense_endpoint(request: Request, expense_id: int, db: Session = Depends(get_db)):
-    active_trip = get_active_trip(request, db)
-    if active_trip:
-        exp = db.query(ExpenseModel).filter(
-            ExpenseModel.trip_id == active_trip.id,
-            ExpenseModel.id == expense_id
-        ).first()
-        if exp:
-            db.delete(exp)
-            db.commit()
-
-    ctx = build_context(request, db, active_trip)
+    ctx = build_context(request, db, active_trip, current_user=current_user)
     return templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
 
 
+@app.post("/api/expenses/{expense_id}/delete", response_class=HTMLResponse)
+async def delete_expense_endpoint(
+    request: Request,
+    expense_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    active_trip = get_active_trip(request, db, current_user)
+    if not active_trip:
+        raise HTTPException(status_code=400, detail="No active trip selected")
+
+    e = db.query(ExpenseModel).filter(
+        ExpenseModel.id == expense_id,
+        ExpenseModel.trip_id == active_trip.id
+    ).first()
+    if e:
+        db.delete(e)
+        db.commit()
+
+    ctx = build_context(request, db, active_trip, current_user=current_user)
+    return templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
+
+
+@app.post("/api/settlements/toggle", response_class=HTMLResponse)
+async def toggle_settlement_endpoint(
+    request: Request,
+    from_name: str = Form(...),
+    to_name: str = Form(...),
+    amount: float = Form(0.0),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    active_trip = get_active_trip(request, db, current_user)
+    if not active_trip:
+        raise HTTPException(status_code=400, detail="No active trip selected")
+
+    settlement = db.query(SettlementStatusModel).filter(
+        SettlementStatusModel.trip_id == active_trip.id,
+        SettlementStatusModel.from_user == from_name,
+        SettlementStatusModel.to_user == to_name,
+    ).first()
+
+    if not settlement:
+        settlement = SettlementStatusModel(
+            trip_id=active_trip.id,
+            from_user=from_name,
+            to_user=to_name,
+            amount=amount,
+            is_settled=True,
+            settled_at=dt.datetime.utcnow(),
+        )
+        db.add(settlement)
+    else:
+        settlement.is_settled = not settlement.is_settled
+        settlement.settled_at = dt.datetime.utcnow() if settlement.is_settled else None
+
+    db.commit()
+
+    ctx = build_context(request, db, active_trip, current_user=current_user)
+    return templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
+
+
+# ------------------------------------------------------------------------------
+# MULTIMODAL RECEIPT SCANNING (GEMINI VISION)
+# ------------------------------------------------------------------------------
+RECEIPT_PROMPT = """
+You are a precision FinTech receipt and invoice parser. Analyze this receipt image and return ONLY a valid JSON object:
+{
+  "merchant": "Business or Store Name",
+  "total_amount": 0.00,
+  "currency": "INR",
+  "category": "Food & Dining",
+  "date": "YYYY-MM-DD",
+  "description": "Brief summary of purchased items"
+}
+Categories must be one of: Food & Dining, Accommodation, Transport & Fuel, Entertainment, Shopping, Utilities, Groceries, Miscellaneous.
+Currencies must be one of: INR, USD, EUR, GBP. Default to INR if ₹ or Rs is seen.
+"""
+
+@app.post("/api/expenses/scan-receipt", response_class=HTMLResponse)
 @app.post("/api/scan-receipt", response_class=HTMLResponse)
 async def scan_receipt_endpoint(
     request: Request,
-    receipt_file: UploadFile = File(...),
-    api_key_override: Optional[str] = Form(None),
-    db: Session = Depends(get_db)
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
-    api_key = get_effective_api_key(api_key_override)
+    active_trip = get_active_trip(request, db, current_user)
+    ctx = build_context(request, db, active_trip, current_user=current_user)
+
+    api_key = get_effective_api_key()
     if not api_key:
         return HTMLResponse(
-            """<div class="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500 dark:text-rose-400 text-sm">
-                <strong>Error:</strong> No Gemini API key detected. Please add your key in the sidebar or set GOOGLE_API_KEY.
-            </div>"""
+            '<div class="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 dark:text-amber-400">'
+            '⚠️ Gemini API key is missing. Set <code>GOOGLE_API_KEY</code> environment variable or provide an override in the sidebar.'
+            '</div>'
         )
 
     try:
-        content = await receipt_file.read()
-        mime_type = receipt_file.content_type or "image/jpeg"
-        data = parse_receipt_ai(content, mime_type, api_key)
-        
-        detected_curr = data.get("currency", "INR").upper()
-        if detected_curr not in CURRENCIES:
-            detected_curr = "INR"
+        contents = await file.read()
+        image = Image.open(io.BytesIO(contents))
 
-        active_trip = get_active_trip(request, db)
-        participants = [p.name for p in db.query(ParticipantModel).filter(ParticipantModel.trip_id == active_trip.id).order_by(ParticipantModel.id).all()] if active_trip else []
-        
-        ctx = {
+        response_text = ""
+        if NEW_GENAI_AVAILABLE:
+            client = new_genai.Client(api_key=api_key)
+            resp = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[image, RECEIPT_PROMPT]
+            )
+            response_text = resp.text
+        elif LEGACY_GENAI_AVAILABLE:
+            genai_legacy.configure(api_key=api_key)
+            model = genai_legacy.GenerativeModel('gemini-1.5-flash')
+            resp = model.generate_content([image, RECEIPT_PROMPT])
+            response_text = resp.text
+
+        clean_json = response_text.replace("```json", "").replace("```", "").strip()
+        data = json.loads(clean_json)
+
+        receipt_ctx = {
             "request": request,
-            "merchant": data.get("merchant", "Merchant"),
+            "merchant": data.get("merchant", "Receipt Item"),
             "amount": float(data.get("total_amount", 0.0)),
-            "currency": detected_curr,
-            "category": data.get("category", "Misc") if data.get("category") in CATEGORIES else "Misc",
-            "date": data.get("date", dt.date.today().strftime("%Y-%m-%d")),
-            "description": data.get("description", "Receipt items"),
-            "participants": participants,
-            "categories": CATEGORIES,
+            "currency": data.get("currency", "INR"),
+            "category": normalize_category_name(data.get("category", "Miscellaneous")),
+            "date": data.get("date", dt.date.today().isoformat()),
+            "description": data.get("description", "Scanned Receipt Expense"),
+            "participants": ctx["participants"],
+            "categories": ctx["categories"],
             "currencies": CURRENCIES,
             "currency_symbols": CURRENCY_SYMBOLS,
+            "currency_rates": CURRENCY_RATES_TO_INR,
         }
-        return templates.TemplateResponse(request=request, name="partials/receipt_review.html", context=ctx)
+        return templates.TemplateResponse(request=request, name="partials/receipt_review.html", context=receipt_ctx)
+
     except Exception as e:
+        logger.error(f"Receipt parsing error: {e}")
         return HTMLResponse(
-            f"""<div class="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500 dark:text-rose-400 text-sm">
-                <strong>AI Parsing Error:</strong> {str(e)}
-            </div>"""
+            f'<div class="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-600 dark:text-rose-400">'
+            f'❌ Receipt scan failed: {str(e)}'
+            f'</div>'
         )
 
 
 @app.post("/api/expenses/confirm-receipt", response_class=HTMLResponse)
+@app.post("/api/confirm-receipt", response_class=HTMLResponse)
 async def confirm_receipt_endpoint(
     request: Request,
-    payer: str = Form(...),
+    description: str = Form(...),
     amount: float = Form(...),
     currency: str = Form("INR"),
-    category: str = Form("Misc"),
+    category: str = Form("Miscellaneous"),
+    custom_category: Optional[str] = Form(None),
     date: str = Form(...),
-    description: str = Form(""),
-    splitters: Optional[List[str]] = Form(None),
-    db: Session = Depends(get_db)
+    payer: str = Form(...),
+    splitters: List[str] = Form(...),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
-    active_trip = get_active_trip(request, db)
-    if not active_trip:
-        active_trip = TripModel(name="My Trip", currency="INR")
-        db.add(active_trip)
-        db.commit()
-        db.refresh(active_trip)
-
-    all_participants = [p.name for p in db.query(ParticipantModel).filter(ParticipantModel.trip_id == active_trip.id).all()]
-    selected_splitters = splitters or all_participants[:]
-    clean_splitters = [s for s in selected_splitters if s in all_participants] or all_participants[:]
-
-    if amount > 0:
-        clean_amount = min(float(amount), 100_000_000.0)
-        clean_currency = currency.upper() if currency.upper() in CURRENCIES else "INR"
-        normalized_inr = normalize_to_inr(clean_amount, clean_currency)
-        new_exp = ExpenseModel(
-            trip_id=active_trip.id,
-            date=date,
-            payer=payer,
-            original_amount=round(float(clean_amount), 2),
-            currency=clean_currency,
-            amount=normalized_inr,
-            category=category if category in CATEGORIES else "Misc",
-            description=description.strip() or "Receipt Purchase",
-            splitters=json.dumps(clean_splitters)
-        )
-        db.add(new_exp)
-        db.commit()
-
-    ctx = build_context(request, db, active_trip)
-    resp = templates.TemplateResponse(request=request, name="partials/dashboard.html", context=ctx)
-    resp.set_cookie("tripsplit_active_trip", str(active_trip.id), max_age=30*86400, httponly=True, samesite="lax")
-    return resp
+    return await add_expense_endpoint(
+        request=request,
+        description=description,
+        amount=amount,
+        currency=currency,
+        category=category,
+        custom_category=custom_category,
+        date=date,
+        payer=payer,
+        splitters=splitters,
+        db=db,
+        current_user=current_user
+    )
 
 
 # ------------------------------------------------------------------------------
@@ -991,7 +1571,6 @@ async def confirm_receipt_endpoint(
 # ------------------------------------------------------------------------------
 @app.get("/api/fx/rates")
 async def get_fx_rates():
-    """Return exchange rates to INR and symbol map for live front-end calculators."""
     return {
         "base": "INR",
         "rates": CURRENCY_RATES_TO_INR,
@@ -1001,27 +1580,21 @@ async def get_fx_rates():
 
 @app.get("/api/fx/convert")
 async def convert_currency(amount: float = 1.0, from_curr: str = "USD", to_curr: str = "INR"):
-    """Instant normalization and conversion between supported currencies."""
     clean_from = from_curr.upper() if from_curr.upper() in CURRENCIES else "USD"
     clean_to = to_curr.upper() if to_curr.upper() in CURRENCIES else "INR"
-    
-    # Calculate amount in base INR
+
     rate_to_inr = CURRENCY_RATES_TO_INR.get(clean_from, 1.0)
-    inr_amount = float(amount) * rate_to_inr
-    
-    # Convert from INR to target currency
+    amt_inr = float(amount) * rate_to_inr
     rate_from_inr = 1.0 / CURRENCY_RATES_TO_INR.get(clean_to, 1.0)
-    target_amount = round(inr_amount * rate_from_inr, 2)
-    
+    final_amt = amt_inr * rate_from_inr
+
     return {
-        "amount": amount,
-        "from": clean_from,
-        "to": clean_to,
-        "result": target_amount,
+        "from_currency": clean_from,
+        "to_currency": clean_to,
+        "original_amount": round(float(amount), 2),
+        "converted_amount": round(final_amt, 2),
         "rate": round(rate_to_inr * rate_from_inr, 4),
-        "inr_equivalent": round(inr_amount, 2),
-        "from_symbol": CURRENCY_SYMBOLS.get(clean_from, ""),
-        "to_symbol": CURRENCY_SYMBOLS.get(clean_to, ""),
+        "symbol": CURRENCY_SYMBOLS.get(clean_to, "₹")
     }
 
 
@@ -1029,8 +1602,12 @@ async def convert_currency(amount: float = 1.0, from_curr: str = "USD", to_curr:
 # CSV EXPORT ROUTES (TRIP-SCOPED)
 # ------------------------------------------------------------------------------
 @app.get("/api/export/settlement")
-async def export_settlement_csv(request: Request, db: Session = Depends(get_db)):
-    active_trip = get_active_trip(request, db)
+async def export_settlement_csv(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    active_trip = get_active_trip(request, db, current_user)
     fin = compute_financials(db, active_trip)
     transactions = fin["transactions"]
     trip_title = (active_trip.name if active_trip else "trip").replace(" ", "_").lower()
@@ -1050,8 +1627,12 @@ async def export_settlement_csv(request: Request, db: Session = Depends(get_db))
 
 
 @app.get("/api/export/ledger")
-async def export_ledger_csv(request: Request, db: Session = Depends(get_db)):
-    active_trip = get_active_trip(request, db)
+async def export_ledger_csv(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    active_trip = get_active_trip(request, db, current_user)
     fin = compute_financials(db, active_trip)
     expenses = fin["expenses"]
     trip_title = (active_trip.name if active_trip else "trip").replace(" ", "_").lower()
@@ -1083,3 +1664,13 @@ async def export_ledger_csv(request: Request, db: Session = Depends(get_db)):
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=tripsplit_{trip_title}_ledger.csv"}
     )
+
+
+@app.get("/api/export/csv")
+async def export_csv_alias(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Convenience alias for ledger CSV export."""
+    return await export_ledger_csv(request, db, current_user)
